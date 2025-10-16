@@ -26,7 +26,7 @@ def extract_address_from_text(text):
 
 
 async def parse_avito(url: str):
-    """Парсер Avito с эмуляцией человека + куки"""
+    """Парсер Avito с полным набором cookies"""
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -39,7 +39,6 @@ async def parse_avito(url: str):
             ]
         )
         
-        # Создаём контекст с куками
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
@@ -49,87 +48,92 @@ async def parse_avito(url: str):
             permissions=["geolocation"],
         )
         
-        # ===== ДОБАВЛЯЕМ КУКИ =====
+        # ===== ВСЕ 13 КУКИ ОТ ТВОЕГО БРАУЗЕРА =====
         cookies = [
             {
-                "name": "__ai_fp_uuid",
-                "value": "117fe7e4bec96675%3A2",
-                "domain": ".avito.ru",
-                "path": "/"
-            },
-            {
-                "name": "__upin",
-                "value": "aSYzuudPaVOCnSKRMPAr3Q",
-                "domain": ".avito.ru",
-                "path": "/"
-            },
-            {
                 "name": "_adcc",
-                "value": "1.INlfy6kz1Bu+RCeJz49lFZzRImbqDE+ucIqGM2FFYD63s7/jc1GuhHzjV7OM6ze8rY7wwNg",
+                "value": "1.M6leiRVFrp4cYDp+89a9acQWLmRevvomcm2VRQxNbhofr/sXB6hQSWXIdfIHtG0uacSgWE8",
                 "domain": ".avito.ru",
                 "path": "/"
             },
             {
-                "name": "_ga",
-                "value": "GA1.1.1356008638.1753109631",
+                "name": "_avisc",
+                "value": "Q/UXqZCxiH671DkySCmC5pLjWlCSHV6+VoEFaBX22oM=",
                 "domain": ".avito.ru",
                 "path": "/"
             },
             {
-                "name": "_ga_M29JC28873",
-                "value": "GS2.1.s1753109630$o1$g1$t1753109870$j17$l0$h0",
+                "name": "f",
+                "value": "5.cc913c231fb04ceddc134d8a1938bf88a68643d4d8df96e9a68643d4d8df96e9a68643d4d8df96e9a68643d4d8df96e94f9572e6986d0c624f9572e6986d0c624f9572e6986d0c62ba029cd346349f36c1e8912fd5a48d02c1e8912fd5a48d0246b8ae4e81acb9fa1a2a574992f83a9246b8ae4e81acb9fa46b8ae4e81acb9fae992ad2cc54b8aa8af305aadb1df8cebc93bf74210ee38d940e3fb81381f359178ba5f931b08c66aff38e8d292af81e50df103df0c26013a2ebf3cb6fd35a0ac71e7cb57bbcb8e0ff0c77052689da50ddc5322845a0cba1aba0ac8037e2b74f92da10fb74cac1eab2da10fb74cac1eab2da10fb74cac1eabdc5322845a0cba1a0df103df0c26013a037e1fbb3ea05095de87ad3b397f946b4c41e97fe93686adff426b6cf1fd027fd476f8663ddba24a02c730c0109b9fbb72f6ee9e83550139b71fcc6d0e9258d7c5584122abfc8bae69081c2d33c8f9c0bc47737e6d23c603e2415097439d404746b8ae4e81acb9fa786047a80c779d5146b8ae4e81acb9fa8b2701e3210600292da10fb74cac1eab2da10fb74cac1eabb3ae333f3b35fe91de6c39666ae9b0d7ce067ee07b6dd903a77fbce136bf1ad8",
                 "domain": ".avito.ru",
                 "path": "/"
             },
             {
-                "name": "_gcl_au",
-                "value": "1.1.2048855763.1753109630",
+                "name": "ft",
+                "value": "gQa0SAiNLAh8/20/ZSVkrK6YorlWICp0vrqetUoXmFipNK9pFuCT7x8hkeBhiEzvWfhLWVYGTd8qn55QIe1NVG3fM4ROFf7WheAgFbWaIwMOjzB6jO3y6uaZHuYoXdpNQqUSBv272BvCPZgPtHdyNcXmermtL414TfyWEB0tnj4vEYLhZ8g+BgywmsQDTTnv",
                 "domain": ".avito.ru",
                 "path": "/"
             },
             {
-                "name": "_ym_d",
-                "value": "1753109630",
+                "name": "gMltIuegZN2COuSe",
+                "value": "EOFGWsm50bhh17prLqaIgdir1V0kgrvN",
                 "domain": ".avito.ru",
                 "path": "/"
             },
             {
-                "name": "_ym_uid",
-                "value": "1753109630745711422",
+                "name": "srv_id",
+                "value": "MsbUS9kQDmW4Z2hG.3IAyeZZEQIUN2T7yBmBo88BNqruDCKzPrppEONQyqT_Fx0m79E3i-OJ3yJAe_Dv6cEfE.spS9zCiB66v8EF2KKKqrfIuNZFbDsqRnC2tKP66XCZE=.web",
                 "domain": ".avito.ru",
                 "path": "/"
             },
             {
-                "name": "acs_3",
-                "value": "%7B%22hash%22%3A%221aa3f9523ee6c2690cb34fc702d4143056487c0d%22%2C%22nst%22%3A1753196031204%2C%22sl%22%3A%7B%22224%22%3A1753109631204%2C%221228%22%3A1753109631204%7D%7D",
+                "name": "u",
+                "value": "37bckues.lg004b.1qwy2n3011y00",
                 "domain": ".avito.ru",
                 "path": "/"
             },
             {
-                "name": "adrcid",
-                "value": "AUdKt29rO65xzslKR47qqwA",
+                "name": "uxs_uid",
+                "value": "c52e1320-aae1-11f0-87c1-755c364d01d1",
                 "domain": ".avito.ru",
                 "path": "/"
             },
             {
-                "name": "adrdel",
-                "value": "1753109631190",
+                "name": "v",
+                "value": "1760654700",
                 "domain": ".avito.ru",
                 "path": "/"
             },
             {
-                "name": "buyer_laas_location",
-                "value": "637640",
-                "domain": ".avito.ru",
+                "name": "csprefid",
+                "value": "51e83786-5e8f-4f17-8043-d0bf08ebe827",
+                "domain": ".www.avito.ru",
+                "path": "/"
+            },
+            {
+                "name": "cssid",
+                "value": "df3a406b-2222-465b-aabb-e006dabd5666",
+                "domain": ".www.avito.ru",
+                "path": "/"
+            },
+            {
+                "name": "cssid_exp",
+                "value": "1760656499359",
+                "domain": ".www.avito.ru",
+                "path": "/"
+            },
+            {
+                "name": "cookie_consent_shown",
+                "value": "1",
+                "domain": "www.avito.ru",
                 "path": "/"
             }
         ]
         
-        # Добавляем куки в контекст
         await context.add_cookies(cookies)
         print(f"[INFO] Добавлено {len(cookies)} куки")
         
-        # Скрываем признаки автоматизации
+        # Скрываем webdriver
         await context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => false,
@@ -143,12 +147,9 @@ async def parse_avito(url: str):
             Object.defineProperty(navigator, 'platform', {
                 get: () => 'MacIntel',
             });
-            window.chrome = {
-                runtime: {},
-            };
+            window.chrome = { runtime: {} };
         """)
         
-        # Добавляем реалистичные заголовки
         await context.set_extra_http_headers({
             "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -159,12 +160,9 @@ async def parse_avito(url: str):
         })
         
         page = await context.new_page()
-        
         print(f"[DEBUG] Парсинг URL: {url}")
         
-        # ===== ЭМУЛЯЦИЯ РЕАЛЬНОГО ПОЛЬЗОВАТЕЛЯ =====
-        
-        # 1. Сначала заходим на главную Avito
+        # Заход на главную
         try:
             print("[INFO] Загружаем главную...")
             await page.goto("https://www.avito.ru/", wait_until="domcontentloaded", timeout=30000)
@@ -177,13 +175,13 @@ async def parse_avito(url: str):
         except Exception as e:
             print(f"[WARNING] Ошибка главной: {e}")
         
-        # 2. Теперь переходим на конкретное объявление
+        # Переход на объявление
         try:
             print(f"[INFO] Переход на объявление...")
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(random.randint(3000, 5000))
             
-            # Эмуляция чтения страницы
+            # Эмуляция чтения
             for _ in range(random.randint(2, 4)):
                 scroll_amount = random.randint(200, 500)
                 await page.evaluate(f'window.scrollBy(0, {scroll_amount})')
@@ -195,21 +193,16 @@ async def parse_avito(url: str):
         except Exception as e:
             print(f"[ERROR] Ошибка объявления: {e}")
         
-        # Проверка на блокировку
+        # Проверка блокировки
         html = await page.content()
-        
         if 'доступ ограничен' in html.lower() or 'captcha' in html.lower():
-            print("[WARNING] Обнаружена блокировка/капча!")
+            print("[WARNING] Блокировка!")
             await browser.close()
-            return {
-                'error': 'blocked',
-                'message': 'Avito заблокировал доступ'
-            }
-        
-        # ===== ПАРСИНГ ДАННЫХ (как раньше) =====
+            return {'error': 'blocked', 'message': 'Avito заблокировал'}
         
         flat = {}
         
+        # Парсинг (как раньше)
         try:
             title_elem = await page.query_selector('[data-marker="item-view/title-info"], h1')
             flat['title'] = (await title_elem.inner_text()).strip() if title_elem else None
@@ -266,7 +259,6 @@ async def parse_avito(url: str):
 
         await browser.close()
         return flat
-
 
 
 async def parse_cian(url: str):
