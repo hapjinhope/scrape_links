@@ -24,114 +24,117 @@ def extract_address_from_text(text):
     return None
 
 async def parse_avito(url: str):
-    """Парсер Avito"""
+    """Парсер Avito (мобильная версия)"""
+    # Конвертируем desktop URL в mobile
+    mobile_url = url.replace('www.avito.ru', 'm.avito.ru')
+    
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
+        # Эмулируем мобильный браузер
+        iphone_13 = p.devices['iPhone 13 Pro']
+        
+        browser = await p.chromium.launch(
+            headless=True, 
+            args=['--no-sandbox', '--disable-setuid-sandbox']
+        )
+        
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            viewport={"width": 1920, "height": 1080},
+            **iphone_13,
             locale="ru-RU"
         )
         
         page = await context.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(8000)
+        
+        print(f"[DEBUG] Mobile URL: {mobile_url}")
+        
+        await page.goto(mobile_url, wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(5000)
 
-        flat = {}
         html = await page.content()
         
-        # 🔍 ДОБАВЬ ЭТИ СТРОКИ ДЛЯ ОТЛАДКИ:
-        print(f"[DEBUG AVITO] URL: {url}")
-        print(f"[DEBUG AVITO] HTML length: {len(html)}")
-        print(f"[DEBUG AVITO] HTML snippet: {html[:500]}")
-        
-        # Проверка на блокировку
-        if 'captcha' in html.lower():
-            print("[WARNING] Avito показал CAPTCHA!")
-        if 'доступ ограничен' in html.lower() or 'access denied' in html.lower():
-            print("[WARNING] Avito заблокировал доступ!")
+        # Debug
+        print(f"[DEBUG] HTML length: {len(html)}")
+        if 'доступ ограничен' in html.lower() or 'captcha' in html.lower():
+            print("[WARNING] Мобильная версия заблокирована!")
+        else:
+            print("[SUCCESS] Мобильная версия загрузилась!")
+
+        flat = {}
         
         # Заголовок
         try:
-            title = await page.query_selector('[data-marker="item-view/title-info"], h1')
-            flat['title'] = (await title.inner_text()).strip() if title else None
-            print(f"[DEBUG AVITO] Title: {flat['title']}")
-        except Exception as e:
+            title_elem = await page.query_selector('h1[itemprop="name"], h1')
+            if title_elem:
+                flat['title'] = (await title_elem.inner_text()).strip()
+            else:
+                flat['title'] = None
+        except: 
             flat['title'] = None
-            print(f"[DEBUG AVITO] Title error: {e}")
-        
-        # ... остальной код без изменений
-        # Заголовок
-        try:
-            title = await page.query_selector('[data-marker="item-view/title-info"], h1')
-            flat['title'] = (await title.inner_text()).strip() if title else None
-        except: flat['title'] = None
 
         # Цена
         try:
-            price = await page.query_selector('[data-marker="item-view/item-price"]')
-            flat['price'] = (await price.inner_text()).strip() if price else None
-        except: flat['price'] = None
+            price_elem = await page.query_selector('[itemprop="price"], [data-marker="item-view/item-price"]')
+            if price_elem:
+                flat['price'] = (await price_elem.inner_text()).strip()
+            else:
+                flat['price'] = None
+        except: 
+            flat['price'] = None
 
         # Адрес
-        address = None
         try:
-            addr_elem = await page.query_selector('[data-marker="item-view/location-address"]')
+            addr_elem = await page.query_selector('[itemprop="address"], [class*="geo"]')
             if addr_elem:
-                address = (await addr_elem.inner_text()).strip()
-        except: pass
-        
-        if not address:
-            try:
-                desc = await page.query_selector('[data-marker="item-view/item-description"]')
-                if desc:
-                    desc_text = (await desc.inner_text()).strip()
-                    extracted = extract_address_from_text(desc_text)
-                    if extracted:
-                        address = "Москва, " + extracted
-            except: pass
-        
-        flat['address'] = address
+                flat['address'] = (await addr_elem.inner_text()).strip()
+            else:
+                flat['address'] = None
+        except: 
+            flat['address'] = None
 
         # Описание
         try:
-            desc = await page.query_selector('[data-marker="item-view/item-description"]')
-            flat['description'] = (await desc.inner_text()).strip() if desc else None
-        except: flat['description'] = None
+            desc_elem = await page.query_selector('[itemprop="description"], [class*="description"]')
+            if desc_elem:
+                flat['description'] = (await desc_elem.inner_text()).strip()
+            else:
+                flat['description'] = None
+        except: 
+            flat['description'] = None
 
         # Параметры
         params = {}
         try:
-            params_sections = await page.query_selector_all('[data-marker="item-view/item-params"]')
-            for section in params_sections:
-                items = await section.query_selector_all('li')
-                for item in items:
-                    try:
-                        text = (await item.inner_text()).strip()
-                        if ':' in text:
-                            key, value = text.split(':', 1)
-                            params[key.strip()] = value.strip()
-                    except: continue
-        except: pass
+            param_items = await page.query_selector_all('li[class*="params"], [class*="item-params"] li')
+            for item in param_items:
+                try:
+                    text = (await item.inner_text()).strip()
+                    if ':' in text:
+                        key, value = text.split(':', 1)
+                        params[key.strip()] = value.strip()
+                except: 
+                    continue
+        except: 
+            pass
         
         flat['params'] = params
 
         # Фото
         try:
-            photo_urls = set()
-            imgs = await page.query_selector_all('img[src*="avito.st"]')
+            photo_urls = []
+            imgs = await page.query_selector_all('img[src*="avito.st"], img[data-marker*="image"]')
             for img in imgs:
                 src = await img.get_attribute('src')
                 if src and '.jpg' in src:
                     clean_url = src.split('?')[0]
                     if len(clean_url) > 50:
-                        photo_urls.add(clean_url)
-            flat['photos'] = list(photo_urls)
+                        photo_urls.append(clean_url)
+            flat['photos'] = list(set(photo_urls))
         except:
             flat['photos'] = []
 
         await browser.close()
         return flat
+
+
 
 async def parse_cian(url: str):
     """Парсер Cian"""
