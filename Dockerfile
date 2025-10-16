@@ -1,10 +1,9 @@
 FROM python:3.11-slim
 
-WORKDIR /app
-
-# Установка системных зависимостей
+# Установка системных зависимостей для Playwright
 RUN apt-get update && apt-get install -y \
     wget \
+    gnupg \
     ca-certificates \
     fonts-liberation \
     libasound2 \
@@ -25,24 +24,19 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon0 \
     libxrandr2 \
     xdg-utils \
-    libu2f-udev \
-    libvulkan1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Копируем requirements
-COPY requirements.txt .
+WORKDIR /app
 
-# Устанавливаем Python зависимости
+# Копирование requirements.txt и установка зависимостей
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем Playwright Chromium
-RUN playwright install chromium --with-deps
+# Установка браузера Chromium для Playwright
+RUN playwright install --with-deps chromium
 
-# Копируем код
-COPY main.py .
+# Копирование остального кода
+COPY . .
 
-# Expose порт
-EXPOSE 8000
-
-# Запуск
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# ВАЖНО: Команда запуска приложения
+CMD ["python", "-u", "main.py"]
