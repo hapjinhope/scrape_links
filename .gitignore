@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Playwright
+.cache/
+playwright-report/
+test-results/
+
+# Results & Screenshots (твои временные файлы)
+results/
+screenshots/
+outputs/
+*.txt
+*.png
+!requirements.txt
+
+# Test files
+test.py
+avitotest.py
+cian.py
+avito.py
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.cursor/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Railway
+.railway/
+
+# Git
+.git/
