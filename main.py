@@ -40,6 +40,27 @@ async def parse_avito(url: str):
         flat = {}
         html = await page.content()
         
+        # 🔍 ДОБАВЬ ЭТИ СТРОКИ ДЛЯ ОТЛАДКИ:
+        print(f"[DEBUG AVITO] URL: {url}")
+        print(f"[DEBUG AVITO] HTML length: {len(html)}")
+        print(f"[DEBUG AVITO] HTML snippet: {html[:500]}")
+        
+        # Проверка на блокировку
+        if 'captcha' in html.lower():
+            print("[WARNING] Avito показал CAPTCHA!")
+        if 'доступ ограничен' in html.lower() or 'access denied' in html.lower():
+            print("[WARNING] Avito заблокировал доступ!")
+        
+        # Заголовок
+        try:
+            title = await page.query_selector('[data-marker="item-view/title-info"], h1')
+            flat['title'] = (await title.inner_text()).strip() if title else None
+            print(f"[DEBUG AVITO] Title: {flat['title']}")
+        except Exception as e:
+            flat['title'] = None
+            print(f"[DEBUG AVITO] Title error: {e}")
+        
+        # ... остальной код без изменений
         # Заголовок
         try:
             title = await page.query_selector('[data-marker="item-view/title-info"], h1')
