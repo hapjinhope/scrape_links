@@ -7,5 +7,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
 
-# Railway автоматически установит $PORT
-CMD uvicorn main:app --host 0.0.0.0 --port $PORT
+# Запуск через python (используется код из main.py)
+CMD ["python", "main.py"]
