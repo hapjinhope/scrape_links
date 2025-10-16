@@ -4,6 +4,7 @@ from pydantic import BaseModel, HttpUrl
 import asyncio
 import re
 from playwright.async_api import async_playwright
+import random
 
 app = FastAPI(title="Парсер квартир Avito & Cian")
 
@@ -23,46 +24,145 @@ def extract_address_from_text(text):
             return match.group(0).strip()
     return None
 
+
 async def parse_avito(url: str):
-    """Парсер Avito (мобильная версия)"""
-    # Конвертируем desktop URL в mobile
-    mobile_url = url.replace('www.avito.ru', 'm.avito.ru')
-    
+    """Парсер Avito с эмуляцией человека"""
     async with async_playwright() as p:
-        # Эмулируем мобильный браузер
-        iphone_13 = p.devices['iPhone 13 Pro']
-        
+        # Запуск браузера с анти-детект параметрами
         browser = await p.chromium.launch(
-            headless=True, 
-            args=['--no-sandbox', '--disable-setuid-sandbox']
+            headless=True,
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--disable-web-security'
+            ]
         )
         
+        # Создаём реалистичный контекст браузера
         context = await browser.new_context(
-            **iphone_13,
-            locale="ru-RU"
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+            locale="ru-RU",
+            timezone_id="Europe/Moscow",
+            geolocation={"longitude": 37.6173, "latitude": 55.7558},
+            permissions=["geolocation"],
         )
+        
+        # Скрываем признаки автоматизации
+        await context.add_init_script("""
+            // Удаляем webdriver
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => false,
+            });
+            
+            // Добавляем реальные плагины
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+            });
+            
+            // Добавляем языки
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['ru-RU', 'ru', 'en-US', 'en'],
+            });
+            
+            // Platform
+            Object.defineProperty(navigator, 'platform', {
+                get: () => 'MacIntel',
+            });
+            
+            // Chrome объект
+            window.chrome = {
+                runtime: {},
+            };
+        """)
+        
+        # Добавляем реалистичные заголовки
+        await context.set_extra_http_headers({
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "sec-ch-ua": '"Chromium";v="120", "Google Chrome";v="120", "Not=A?Brand";v="99"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"macOS"',
+            "Referer": "https://www.google.com/",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "cross-site",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+        })
         
         page = await context.new_page()
         
-        print(f"[DEBUG] Mobile URL: {mobile_url}")
+        print(f"[DEBUG] Парсинг URL: {url}")
         
-        await page.goto(mobile_url, wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(5000)
-
+        # ===== ЭМУЛЯЦИЯ РЕАЛЬНОГО ПОЛЬЗОВАТЕЛЯ =====
+        
+        # 1. Сначала заходим на главную Avito
+        try:
+            print("[INFO] Загружаем главную страницу Avito...")
+            await page.goto("https://www.avito.ru/", wait_until="domcontentloaded", timeout=30000)
+            
+            # Случайное ожидание как у человека
+            await page.wait_for_timeout(random.randint(2000, 4000))
+            
+            # Случайное движение мыши
+            await page.mouse.move(random.randint(100, 800), random.randint(100, 600))
+            await page.wait_for_timeout(random.randint(500, 1500))
+            
+            # Скроллинг страницы
+            await page.evaluate('window.scrollTo(0, 300)')
+            await page.wait_for_timeout(random.randint(1000, 2000))
+            
+            print("[SUCCESS] Главная страница загружена")
+        except Exception as e:
+            print(f"[WARNING] Ошибка при загрузке главной: {e}")
+        
+        # 2. Теперь переходим на конкретное объявление
+        try:
+            print(f"[INFO] Переход на объявление...")
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            
+            # Ожидание загрузки
+            await page.wait_for_timeout(random.randint(3000, 5000))
+            
+            # Эмуляция чтения страницы
+            for _ in range(random.randint(2, 4)):
+                # Случайный скроллинг
+                scroll_amount = random.randint(200, 500)
+                await page.evaluate(f'window.scrollBy(0, {scroll_amount})')
+                await page.wait_for_timeout(random.randint(800, 1500))
+                
+                # Случайное движение мыши
+                await page.mouse.move(
+                    random.randint(200, 1000),
+                    random.randint(200, 800)
+                )
+                await page.wait_for_timeout(random.randint(500, 1000))
+            
+            print("[SUCCESS] Объявление загружено")
+        except Exception as e:
+            print(f"[ERROR] Ошибка при загрузке объявления: {e}")
+        
+        # Проверка на блокировку
         html = await page.content()
         
-        # Debug
-        print(f"[DEBUG] HTML length: {len(html)}")
         if 'доступ ограничен' in html.lower() or 'captcha' in html.lower():
-            print("[WARNING] Мобильная версия заблокирована!")
-        else:
-            print("[SUCCESS] Мобильная версия загрузилась!")
-
+            print("[WARNING] Обнаружена блокировка/капча!")
+            await browser.close()
+            return {
+                'error': 'blocked',
+                'message': 'Avito заблокировал доступ'
+            }
+        
+        # ===== ПАРСИНГ ДАННЫХ =====
+        
         flat = {}
         
         # Заголовок
         try:
-            title_elem = await page.query_selector('h1[itemprop="name"], h1')
+            title_elem = await page.query_selector('[data-marker="item-view/title-info"], h1')
             if title_elem:
                 flat['title'] = (await title_elem.inner_text()).strip()
             else:
@@ -72,7 +172,7 @@ async def parse_avito(url: str):
 
         # Цена
         try:
-            price_elem = await page.query_selector('[itemprop="price"], [data-marker="item-view/item-price"]')
+            price_elem = await page.query_selector('[data-marker="item-view/item-price"]')
             if price_elem:
                 flat['price'] = (await price_elem.inner_text()).strip()
             else:
@@ -82,17 +182,24 @@ async def parse_avito(url: str):
 
         # Адрес
         try:
-            addr_elem = await page.query_selector('[itemprop="address"], [class*="geo"]')
+            addr_elem = await page.query_selector('[data-marker="item-view/location-address"]')
             if addr_elem:
                 flat['address'] = (await addr_elem.inner_text()).strip()
             else:
-                flat['address'] = None
+                # Пробуем извлечь из текста описания
+                desc_elem = await page.query_selector('[data-marker="item-view/item-description"]')
+                if desc_elem:
+                    desc_text = (await desc_elem.inner_text()).strip()
+                    extracted = extract_address_from_text(desc_text)
+                    flat['address'] = f"Москва, {extracted}" if extracted else None
+                else:
+                    flat['address'] = None
         except: 
             flat['address'] = None
 
         # Описание
         try:
-            desc_elem = await page.query_selector('[itemprop="description"], [class*="description"]')
+            desc_elem = await page.query_selector('[data-marker="item-view/item-description"]')
             if desc_elem:
                 flat['description'] = (await desc_elem.inner_text()).strip()
             else:
@@ -103,15 +210,17 @@ async def parse_avito(url: str):
         # Параметры
         params = {}
         try:
-            param_items = await page.query_selector_all('li[class*="params"], [class*="item-params"] li')
-            for item in param_items:
-                try:
-                    text = (await item.inner_text()).strip()
-                    if ':' in text:
-                        key, value = text.split(':', 1)
-                        params[key.strip()] = value.strip()
-                except: 
-                    continue
+            params_sections = await page.query_selector_all('[data-marker="item-view/item-params"]')
+            for section in params_sections:
+                items = await section.query_selector_all('li')
+                for item in items:
+                    try:
+                        text = (await item.inner_text()).strip()
+                        if ':' in text:
+                            key, value = text.split(':', 1)
+                            params[key.strip()] = value.strip()
+                    except: 
+                        continue
         except: 
             pass
         
@@ -120,7 +229,7 @@ async def parse_avito(url: str):
         # Фото
         try:
             photo_urls = []
-            imgs = await page.query_selector_all('img[src*="avito.st"], img[data-marker*="image"]')
+            imgs = await page.query_selector_all('img[src*="avito.st"]')
             for img in imgs:
                 src = await img.get_attribute('src')
                 if src and '.jpg' in src:
@@ -133,7 +242,6 @@ async def parse_avito(url: str):
 
         await browser.close()
         return flat
-
 
 
 async def parse_cian(url: str):
