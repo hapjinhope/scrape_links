@@ -26,9 +26,8 @@ def extract_address_from_text(text):
 
 
 async def parse_avito(url: str):
-    """Парсер Avito с эмуляцией человека"""
+    """Парсер Avito с эмуляцией человека + куки"""
     async with async_playwright() as p:
-        # Запуск браузера с анти-детект параметрами
         browser = await p.chromium.launch(
             headless=True,
             args=[
@@ -40,7 +39,7 @@ async def parse_avito(url: str):
             ]
         )
         
-        # Создаём реалистичный контекст браузера
+        # Создаём контекст с куками
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
@@ -50,29 +49,100 @@ async def parse_avito(url: str):
             permissions=["geolocation"],
         )
         
+        # ===== ДОБАВЛЯЕМ КУКИ =====
+        cookies = [
+            {
+                "name": "__ai_fp_uuid",
+                "value": "117fe7e4bec96675%3A2",
+                "domain": ".avito.ru",
+                "path": "/"
+            },
+            {
+                "name": "__upin",
+                "value": "aSYzuudPaVOCnSKRMPAr3Q",
+                "domain": ".avito.ru",
+                "path": "/"
+            },
+            {
+                "name": "_adcc",
+                "value": "1.INlfy6kz1Bu+RCeJz49lFZzRImbqDE+ucIqGM2FFYD63s7/jc1GuhHzjV7OM6ze8rY7wwNg",
+                "domain": ".avito.ru",
+                "path": "/"
+            },
+            {
+                "name": "_ga",
+                "value": "GA1.1.1356008638.1753109631",
+                "domain": ".avito.ru",
+                "path": "/"
+            },
+            {
+                "name": "_ga_M29JC28873",
+                "value": "GS2.1.s1753109630$o1$g1$t1753109870$j17$l0$h0",
+                "domain": ".avito.ru",
+                "path": "/"
+            },
+            {
+                "name": "_gcl_au",
+                "value": "1.1.2048855763.1753109630",
+                "domain": ".avito.ru",
+                "path": "/"
+            },
+            {
+                "name": "_ym_d",
+                "value": "1753109630",
+                "domain": ".avito.ru",
+                "path": "/"
+            },
+            {
+                "name": "_ym_uid",
+                "value": "1753109630745711422",
+                "domain": ".avito.ru",
+                "path": "/"
+            },
+            {
+                "name": "acs_3",
+                "value": "%7B%22hash%22%3A%221aa3f9523ee6c2690cb34fc702d4143056487c0d%22%2C%22nst%22%3A1753196031204%2C%22sl%22%3A%7B%22224%22%3A1753109631204%2C%221228%22%3A1753109631204%7D%7D",
+                "domain": ".avito.ru",
+                "path": "/"
+            },
+            {
+                "name": "adrcid",
+                "value": "AUdKt29rO65xzslKR47qqwA",
+                "domain": ".avito.ru",
+                "path": "/"
+            },
+            {
+                "name": "adrdel",
+                "value": "1753109631190",
+                "domain": ".avito.ru",
+                "path": "/"
+            },
+            {
+                "name": "buyer_laas_location",
+                "value": "637640",
+                "domain": ".avito.ru",
+                "path": "/"
+            }
+        ]
+        
+        # Добавляем куки в контекст
+        await context.add_cookies(cookies)
+        print(f"[INFO] Добавлено {len(cookies)} куки")
+        
         # Скрываем признаки автоматизации
         await context.add_init_script("""
-            // Удаляем webdriver
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => false,
             });
-            
-            // Добавляем реальные плагины
             Object.defineProperty(navigator, 'plugins', {
                 get: () => [1, 2, 3, 4, 5],
             });
-            
-            // Добавляем языки
             Object.defineProperty(navigator, 'languages', {
                 get: () => ['ru-RU', 'ru', 'en-US', 'en'],
             });
-            
-            // Platform
             Object.defineProperty(navigator, 'platform', {
                 get: () => 'MacIntel',
             });
-            
-            // Chrome объект
             window.chrome = {
                 runtime: {},
             };
@@ -82,15 +152,10 @@ async def parse_avito(url: str):
         await context.set_extra_http_headers({
             "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "sec-ch-ua": '"Chromium";v="120", "Google Chrome";v="120", "Not=A?Brand";v="99"',
+            "sec-ch-ua": '"Chromium";v="120", "Google Chrome";v="120"',
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"macOS"',
             "Referer": "https://www.google.com/",
-            "sec-fetch-dest": "document",
-            "sec-fetch-mode": "navigate",
-            "sec-fetch-site": "cross-site",
-            "sec-fetch-user": "?1",
-            "upgrade-insecure-requests": "1",
         })
         
         page = await context.new_page()
@@ -101,49 +166,34 @@ async def parse_avito(url: str):
         
         # 1. Сначала заходим на главную Avito
         try:
-            print("[INFO] Загружаем главную страницу Avito...")
+            print("[INFO] Загружаем главную...")
             await page.goto("https://www.avito.ru/", wait_until="domcontentloaded", timeout=30000)
-            
-            # Случайное ожидание как у человека
             await page.wait_for_timeout(random.randint(2000, 4000))
-            
-            # Случайное движение мыши
             await page.mouse.move(random.randint(100, 800), random.randint(100, 600))
             await page.wait_for_timeout(random.randint(500, 1500))
-            
-            # Скроллинг страницы
             await page.evaluate('window.scrollTo(0, 300)')
             await page.wait_for_timeout(random.randint(1000, 2000))
-            
-            print("[SUCCESS] Главная страница загружена")
+            print("[SUCCESS] Главная загружена")
         except Exception as e:
-            print(f"[WARNING] Ошибка при загрузке главной: {e}")
+            print(f"[WARNING] Ошибка главной: {e}")
         
         # 2. Теперь переходим на конкретное объявление
         try:
             print(f"[INFO] Переход на объявление...")
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            
-            # Ожидание загрузки
             await page.wait_for_timeout(random.randint(3000, 5000))
             
             # Эмуляция чтения страницы
             for _ in range(random.randint(2, 4)):
-                # Случайный скроллинг
                 scroll_amount = random.randint(200, 500)
                 await page.evaluate(f'window.scrollBy(0, {scroll_amount})')
                 await page.wait_for_timeout(random.randint(800, 1500))
-                
-                # Случайное движение мыши
-                await page.mouse.move(
-                    random.randint(200, 1000),
-                    random.randint(200, 800)
-                )
+                await page.mouse.move(random.randint(200, 1000), random.randint(200, 800))
                 await page.wait_for_timeout(random.randint(500, 1000))
             
             print("[SUCCESS] Объявление загружено")
         except Exception as e:
-            print(f"[ERROR] Ошибка при загрузке объявления: {e}")
+            print(f"[ERROR] Ошибка объявления: {e}")
         
         # Проверка на блокировку
         html = await page.content()
@@ -156,58 +206,34 @@ async def parse_avito(url: str):
                 'message': 'Avito заблокировал доступ'
             }
         
-        # ===== ПАРСИНГ ДАННЫХ =====
+        # ===== ПАРСИНГ ДАННЫХ (как раньше) =====
         
         flat = {}
         
-        # Заголовок
         try:
             title_elem = await page.query_selector('[data-marker="item-view/title-info"], h1')
-            if title_elem:
-                flat['title'] = (await title_elem.inner_text()).strip()
-            else:
-                flat['title'] = None
+            flat['title'] = (await title_elem.inner_text()).strip() if title_elem else None
         except: 
             flat['title'] = None
 
-        # Цена
         try:
             price_elem = await page.query_selector('[data-marker="item-view/item-price"]')
-            if price_elem:
-                flat['price'] = (await price_elem.inner_text()).strip()
-            else:
-                flat['price'] = None
+            flat['price'] = (await price_elem.inner_text()).strip() if price_elem else None
         except: 
             flat['price'] = None
 
-        # Адрес
         try:
             addr_elem = await page.query_selector('[data-marker="item-view/location-address"]')
-            if addr_elem:
-                flat['address'] = (await addr_elem.inner_text()).strip()
-            else:
-                # Пробуем извлечь из текста описания
-                desc_elem = await page.query_selector('[data-marker="item-view/item-description"]')
-                if desc_elem:
-                    desc_text = (await desc_elem.inner_text()).strip()
-                    extracted = extract_address_from_text(desc_text)
-                    flat['address'] = f"Москва, {extracted}" if extracted else None
-                else:
-                    flat['address'] = None
+            flat['address'] = (await addr_elem.inner_text()).strip() if addr_elem else None
         except: 
             flat['address'] = None
 
-        # Описание
         try:
             desc_elem = await page.query_selector('[data-marker="item-view/item-description"]')
-            if desc_elem:
-                flat['description'] = (await desc_elem.inner_text()).strip()
-            else:
-                flat['description'] = None
+            flat['description'] = (await desc_elem.inner_text()).strip() if desc_elem else None
         except: 
             flat['description'] = None
 
-        # Параметры
         params = {}
         try:
             params_sections = await page.query_selector_all('[data-marker="item-view/item-params"]')
@@ -223,10 +249,8 @@ async def parse_avito(url: str):
                         continue
         except: 
             pass
-        
         flat['params'] = params
 
-        # Фото
         try:
             photo_urls = []
             imgs = await page.query_selector_all('img[src*="avito.st"]')
@@ -242,6 +266,7 @@ async def parse_avito(url: str):
 
         await browser.close()
         return flat
+
 
 
 async def parse_cian(url: str):
