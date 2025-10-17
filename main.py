@@ -27,7 +27,7 @@ def extract_address_from_text(text):
 
 
 async def parse_avito(url: str):
-    """Парсер Avito БЕЗ заранее заданных cookies"""
+    """Парсер Avito с увеличенными таймаутами и логированием прокси"""
     async with async_playwright() as p:
         # Читаем прокси из переменных окружения
         proxy_server = os.getenv("PROXY_SERVER")
@@ -44,6 +44,9 @@ async def parse_avito(url: str):
                 proxy_config["username"] = proxy_username
             if proxy_password:
                 proxy_config["password"] = proxy_password
+            print(f"[INFO] Прокси настроен: {proxy_server}")
+        else:
+            print("[WARNING] Прокси не настроен!")
         
         browser = await p.chromium.launch(
             headless=True,
@@ -54,7 +57,8 @@ async def parse_avito(url: str):
                 '--disable-blink-features=AutomationControlled',
                 '--disable-dev-shm-usage',
                 '--disable-web-security'
-            ]
+            ],
+            timeout=90000  # <-- 90 секунд на запуск
         )
         
         context = await browser.new_context(
@@ -65,9 +69,6 @@ async def parse_avito(url: str):
             geolocation={"longitude": 37.6173, "latitude": 55.7558},
             permissions=["geolocation"],
         )
-        
-        # ❌ УБРАЛИ ВСЕ 13 COOKIES
-        # Playwright сам создаст свои при первом визите
         
         # Скрываем webdriver
         await context.add_init_script("""
@@ -96,12 +97,15 @@ async def parse_avito(url: str):
         })
         
         page = await context.new_page()
+        page.set_default_timeout(90000)  # <-- 90 секунд по умолчанию
+        page.set_default_navigation_timeout(90000)  # <-- 90 секунд на навигацию
+        
         print(f"[DEBUG] Парсинг URL: {url}")
         
         # Заход на главную (Avito создаст cookies)
         try:
             print("[INFO] Загружаем главную...")
-            await page.goto("https://www.avito.ru/", wait_until="domcontentloaded", timeout=30000)
+            await page.goto("https://www.avito.ru/", wait_until="domcontentloaded", timeout=90000)
             await page.wait_for_timeout(random.randint(2000, 4000))
             await page.mouse.move(random.randint(100, 800), random.randint(100, 600))
             await page.wait_for_timeout(random.randint(500, 1500))
@@ -114,7 +118,7 @@ async def parse_avito(url: str):
         # Переход на объявление
         try:
             print(f"[INFO] Переход на объявление...")
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=90000)
             await page.wait_for_timeout(random.randint(3000, 5000))
             
             # Эмуляция чтения
