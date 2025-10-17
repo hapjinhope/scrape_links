@@ -5,6 +5,7 @@ import asyncio
 import re
 from playwright.async_api import async_playwright
 import random
+import os
 
 app = FastAPI(title="Парсер квартир Avito & Cian")
 
@@ -28,8 +29,25 @@ def extract_address_from_text(text):
 async def parse_avito(url: str):
     """Парсер Avito с полным набором cookies"""
     async with async_playwright() as p:
+        # Читаем прокси из переменных окружения
+        proxy_server = os.getenv("PROXY_SERVER")
+        proxy_username = os.getenv("PROXY_USERNAME")
+        proxy_password = os.getenv("PROXY_PASSWORD")
+        
+        # Настраиваем прокси если указаны
+        proxy_config = None
+        if proxy_server:
+            proxy_config = {
+                "server": proxy_server
+            }
+            if proxy_username:
+                proxy_config["username"] = proxy_username
+            if proxy_password:
+                proxy_config["password"] = proxy_password
+        
         browser = await p.chromium.launch(
             headless=True,
+            proxy=proxy_config,
             args=[
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
