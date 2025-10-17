@@ -7,119 +7,129 @@ from playwright.async_api import async_playwright
 import random
 import os
 
-app = FastAPI(title="Парсер квартир Avito & Cian")
+app = FastAPI(title="Парсер квартир Avito & Cian с Cookies")
 
 class ParseRequest(BaseModel):
     url: HttpUrl
 
-def extract_address_from_text(text):
-    """Извлекает адрес из текста"""
-    patterns = [
-        r'(?:пр-т|проспект|ул\.|улица|бульвар|бул\.|переулок|пер\.)\s+[А-Яа-яЁё\s-]+,?\s*\d+[а-яА-Я]*\d*',
-        r'[А-Яа-яЁё\s-]+,\s*\d+[а-яА-Я]*\d*',
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return match.group(0).strip()
-    return None
+# Файл с cookies
+COOKIES_FILE = "avito_session.json"
 
+async def close_modals(page):
+    """Закрывает модальные окна"""
+    try:
+        selectors = [
+            "button:has-text('Не интересно')",
+            "[data-marker*='modal/close']",
+            ".modal__close",
+        ]
+        for selector in selectors:
+            button = await page.query_selector(selector)
+            if button:
+                await button.click()
+                await asyncio.sleep(1)
+                return True
+        return False
+    except:
+        return False
+
+async def click_continue_if_exists(page):
+    """Клик по 'Продолжить'"""
+    try:
+        selectors = [
+            "button:has-text('Продолжить')",
+            "[data-marker*='continue']",
+        ]
+        for selector in selectors:
+            button = await page.query_selector(selector)
+            if button:
+                await button.click()
+                await asyncio.sleep(5)
+                return True
+        return False
+    except:
+        return False
 
 async def parse_avito(url: str):
-    """Парсер Avito с увеличенными таймаутами и логированием прокси"""
+    """Парсер Avito с cookies"""
     async with async_playwright() as p:
-        # Читаем прокси из переменных окружения
-        proxy_server = os.getenv("PROXY_SERVER")
-        proxy_username = os.getenv("PROXY_USERNAME")
-        proxy_password = os.getenv("PROXY_PASSWORD")
-        
-        # Настраиваем прокси если указаны
-        proxy_config = None
-        if proxy_server:
-            proxy_config = {
-                "server": proxy_server
-            }
-            if proxy_username:
-                proxy_config["username"] = proxy_username
-            if proxy_password:
-                proxy_config["password"] = proxy_password
-            print(f"[INFO] Прокси настроен: {proxy_server}")
-        else:
-            print("[WARNING] Прокси не настроен!")
-        
         browser = await p.chromium.launch(
             headless=True,
-            proxy=proxy_config,
             args=[
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-blink-features=AutomationControlled',
                 '--disable-dev-shm-usage',
-                '--disable-web-security'
+                '--window-size=1920,1080',
+                '--lang=ru-RU',
             ],
-            timeout=90000  # <-- 90 секунд на запуск
+            timeout=90000
         )
         
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1920, "height": 1080},
-            locale="ru-RU",
-            timezone_id="Europe/Moscow",
-            geolocation={"longitude": 37.6173, "latitude": 55.7558},
-            permissions=["geolocation"],
-        )
+        context_options = {
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "viewport": {"width": 1920, "height": 1080},
+            "locale": "ru-RU",
+            "timezone_id": "Europe/Moscow",
+            "geolocation": {"longitude": 37.6173, "latitude": 55.7558},
+            "permissions": ["geolocation"],
+        }
         
-        # Скрываем webdriver
+        # ЗАГРУЗКА COOKIES
+        if os.path.exists(COOKIES_FILE):
+            print(f"[INFO] 🍪 Загружаю cookies из {COOKIES_FILE}")
+            context_options["storage_state"] = COOKIES_FILE
+        else:
+            print(f"[WARNING] ⚠️ Cookies не найдены")
+        
+        context = await browser.new_context(**context_options)
+        
+        # Маскировка
         await context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => false,
-            });
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
             Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5],
+                get: () => [{name: 'Chrome PDF Plugin'}, {name: 'Chrome PDF Viewer'}]
             });
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['ru-RU', 'ru', 'en-US', 'en'],
-            });
-            Object.defineProperty(navigator, 'platform', {
-                get: () => 'Win32',
-            });
+            Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru'] });
             window.chrome = { runtime: {} };
         """)
         
         await context.set_extra_http_headers({
-            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "sec-ch-ua": '"Chromium";v="120", "Google Chrome";v="120"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"Windows"',
+            "Accept-Language": "ru-RU,ru;q=0.9",
             "Referer": "https://www.google.com/",
         })
         
         page = await context.new_page()
-        page.set_default_timeout(90000)  # <-- 90 секунд по умолчанию
-        page.set_default_navigation_timeout(90000)  # <-- 90 секунд на навигацию
+        page.set_default_timeout(90000)
+        page.set_default_navigation_timeout(90000)
         
-        print(f"[DEBUG] Парсинг URL: {url}")
-        
-        # Заход на главную (Avito создаст cookies)
+        # 1. ГЛАВНАЯ СТРАНИЦА
         try:
-            print("[INFO] Загружаем главную...")
+            print("[INFO] Загружаю главную Avito...")
             await page.goto("https://www.avito.ru/", wait_until="domcontentloaded", timeout=90000)
             await page.wait_for_timeout(random.randint(2000, 4000))
+            
+            await close_modals(page)
+            await click_continue_if_exists(page)
+            
+            # Эмуляция
             await page.mouse.move(random.randint(100, 800), random.randint(100, 600))
             await page.wait_for_timeout(random.randint(500, 1500))
             await page.evaluate('window.scrollTo(0, 300)')
             await page.wait_for_timeout(random.randint(1000, 2000))
-            print("[SUCCESS] Главная загружена, cookies созданы Avito")
+            
+            print("[SUCCESS] Главная загружена")
         except Exception as e:
             print(f"[WARNING] Ошибка главной: {e}")
         
-        # Переход на объявление
+        # 2. ОБЪЯВЛЕНИЕ
         try:
             print(f"[INFO] Переход на объявление...")
             await page.goto(url, wait_until="domcontentloaded", timeout=90000)
             await page.wait_for_timeout(random.randint(3000, 5000))
+            
+            await close_modals(page)
+            await click_continue_if_exists(page)
             
             # Эмуляция чтения
             for _ in range(random.randint(2, 4)):
@@ -133,16 +143,31 @@ async def parse_avito(url: str):
         except Exception as e:
             print(f"[ERROR] Ошибка объявления: {e}")
         
+        # ОБНОВЛЕНИЕ COOKIES
+        try:
+            await context.storage_state(path=COOKIES_FILE)
+            print(f"[INFO] 🍪 Cookies обновлены")
+        except Exception as e:
+            print(f"[WARNING] Ошибка сохранения cookies: {e}")
+        
         # Проверка блокировки
         html = await page.content()
-        if 'доступ ограничен' in html.lower() or 'captcha' in html.lower():
+        title = await page.title()
+        
+        is_blocked = (
+            'доступ ограничен' in html.lower() or
+            'access denied' in html.lower() or
+            'captcha' in title.lower()
+        )
+        
+        if is_blocked:
             print("[WARNING] Блокировка!")
             await browser.close()
             return {'error': 'blocked', 'message': 'Avito заблокировал'}
         
+        # Парсинг
         flat = {}
         
-        # Парсинг (как раньше)
         try:
             title_elem = await page.query_selector('[data-marker="item-view/title-info"], h1')
             flat['title'] = (await title_elem.inner_text()).strip() if title_elem else None
@@ -219,24 +244,20 @@ async def parse_cian(url: str):
         flat = {}
         html = await page.content()
         
-        # Заголовок
         try:
             flat['title'] = (await page.inner_text("h1")).strip()
         except: 
             m = re.search(r'(Сдается [^<\n]+м²)', html)
             flat['title'] = m.group(1) if m else None
 
-        # ЖК
         m = re.search(r'ЖК\s*[«"]([^»"<\n]+)', html)
         flat['complex'] = m.group(1).strip() if m else None
 
-        # Цена
         try:
             price_el = await page.query_selector("[data-testid='price-amount']")
             flat['price'] = (await price_el.inner_text()).strip() if price_el else None
         except: flat['price'] = None
 
-        # Адрес
         try:
             addr_items = await page.query_selector_all('[data-name="AddressItem"]')
             address_parts = []
@@ -245,7 +266,6 @@ async def parse_cian(url: str):
             flat['address'] = ', '.join(address_parts) if address_parts else None
         except: flat['address'] = None
 
-        # Метро
         try:
             metros = []
             for elem in await page.query_selector_all('[data-name="UndergroundItem"] a'):
@@ -253,7 +273,6 @@ async def parse_cian(url: str):
             flat['metro'] = metros
         except: flat['metro'] = []
 
-        # Параметры
         params = {}
         try:
             params_elems = await page.query_selector_all('[data-name="OfferSummaryInfoItem"]')
@@ -268,7 +287,6 @@ async def parse_cian(url: str):
                 except: continue
         except: pass
         
-        # Условия аренды
         try:
             fact_items = await page.query_selector_all('[data-name="OfferFactItem"]')
             for item in fact_items:
@@ -283,7 +301,6 @@ async def parse_cian(url: str):
         
         flat['params'] = params
 
-        # В квартире есть
         try:
             features = []
             feature_items = await page.query_selector_all('[data-name="FeaturesItem"]')
@@ -297,13 +314,11 @@ async def parse_cian(url: str):
         except:
             flat['features'] = []
 
-        # Описание
         try:
             desc_el = await page.query_selector("[data-mark='Description']")
             flat['description'] = (await desc_el.inner_text()).strip() if desc_el else None
         except: flat['description'] = None
 
-        # Фото
         try:
             photo_urls = []
             thumb_imgs = await page.query_selector_all('[data-name="PaginationThumbsComponent"] img')
@@ -323,22 +338,16 @@ async def parse_cian(url: str):
 @app.get("/")
 async def root():
     return {
-        "service": "Парсер квартир Avito & Cian",
+        "service": "Парсер Avito & Cian с Cookies 🍪",
+        "cookies_loaded": os.path.exists(COOKIES_FILE),
         "endpoints": {
-            "POST /parse": "Парсить объявление (передать {\"url\": \"https://...\"})"
+            "POST /parse": "Парсить объявление {\"url\": \"https://...\"}"
         }
     }
 
 @app.post("/parse")
 async def parse_flat(request: ParseRequest):
-    """
-    Парсит объявление с Avito или Cian
-    
-    Request body:
-    {
-        "url": "https://www.avito.ru/..."
-    }
-    """
+    """Парсит объявление с Avito или Cian"""
     url_str = str(request.url)
     
     try:
@@ -349,16 +358,15 @@ async def parse_flat(request: ParseRequest):
             result = await parse_cian(url_str)
             result['source'] = 'cian'
         else:
-            raise HTTPException(status_code=400, detail="Поддерживаются только Avito и Cian")
+            raise HTTPException(status_code=400, detail="Только Avito и Cian")
         
         result['url'] = url_str
         return JSONResponse(content=result)
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка парсинга: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Ошибка: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
-    import os
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.getenv("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
