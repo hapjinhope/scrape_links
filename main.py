@@ -14,21 +14,12 @@ class ParseRequest(BaseModel):
 
 COOKIES_FILE = "avito_session.json"
 
-# ✅ ПРОКСИ НАСТРОЙКИ
-PROXY_CONFIG = None
-proxy_server = os.getenv("PROXY_SERVER", "http://45.10.250.223:8000")
-proxy_username = os.getenv("PROXY_USERNAME", "jRKaTF")
-proxy_password = os.getenv("PROXY_PASSWORD", "wHfcmF")
-
-if proxy_server:
-    PROXY_CONFIG = {
-        "server": proxy_server,
-        "username": proxy_username,
-        "password": proxy_password,
-    }
-    print(f"[INFO] 🌐 Прокси включён: {proxy_server}")
-else:
-    print("[WARNING] ⚠️ Прокси не настроен")
+# ✅ Bright Data прокси креды
+PROXY_CONFIG = {
+    "server": os.getenv("PROXY_SERVER", "brd.superproxy.io:33335"),
+    "username": os.getenv("PROXY_USERNAME", "brd-customer-hl_e57b9d94-zone-residential_proxy1"),
+    "password": os.getenv("PROXY_PASSWORD", "wh9kp18xt2ot")
+}
 
 async def human_like_mouse_move(page, from_x, from_y, to_x, to_y):
     steps = random.randint(15, 30)
@@ -102,40 +93,40 @@ async def click_continue_if_exists(page):
 
 async def parse_avito(url: str):
     async with async_playwright() as p:
+        # ✅ Добавляем прокси в launch
         browser = await p.chromium.launch(
             headless=True,
+            proxy=PROXY_CONFIG,  # ← ПРОКСИ!
             args=[
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-blink-features=AutomationControlled',
                 '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--single-process',
-                '--window-size=1280,720',
+                '--window-size=1920,1080',
                 '--lang=ru-RU',
             ],
-            timeout=120000
+            timeout=90000
         )
         
         context_options = {
             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "viewport": {"width": 1280, "height": 720},
+            "viewport": {"width": 1920, "height": 1080},
             "locale": "ru-RU",
-            "timezone_id": "Europe/Moscow",
-            "geolocation": {"longitude": 37.6173, "latitude": 55.7558},
+            "timezone_id": "Asia/Almaty",  # ← Казахстан timezone!
+            "geolocation": {"longitude": 76.9286, "latitude": 43.2220},  # Алматы
             "permissions": ["geolocation"],
         }
-        
-        # ✅ ДОБАВЛЯЕМ ПРОКСИ
-        if PROXY_CONFIG:
-            context_options["proxy"] = PROXY_CONFIG
-            print(f"[INFO] 🌐 Используется прокси: {PROXY_CONFIG['server']}")
         
         if os.path.exists(COOKIES_FILE):
             print(f"[INFO] 🍪 Загружаю cookies")
             context_options["storage_state"] = COOKIES_FILE
         
         context = await browser.new_context(**context_options)
+        
+        # ✅ Блокировка картинок (экономия 60% трафика!)
+        await context.route('**/*.{png,jpg,jpeg,gif,webp,svg}', lambda route: route.abort())
+        await context.route('**/yandex-metrika/**', lambda route: route.abort())
+        await context.route('**/google-analytics/**', lambda route: route.abort())
         
         await context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
@@ -146,32 +137,30 @@ async def parse_avito(url: str):
                     {name: 'Native Client'}
                 ],
             });
-            Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru'] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'kk-KZ'] });
             window.chrome = { runtime: {} };
         """)
         
         await context.set_extra_http_headers({
-            "Accept-Language": "ru-RU,ru;q=0.9",
+            "Accept-Language": "ru-RU,ru;q=0.9,kk;q=0.8",
             "Referer": "https://www.google.com/",
         })
         
         page = await context.new_page()
-        page.set_default_timeout(120000)
+        page.set_default_timeout(90000)
         
         try:
-            print(f"[INFO] Переход на объявление...")
-            await page.goto(url, wait_until="domcontentloaded", timeout=120000)
+            print(f"[INFO] 🚀 Переход через Bright Data (Kazakhstan)...")
+            await page.goto(url, wait_until="domcontentloaded", timeout=90000)
             await page.wait_for_timeout(random.randint(3000, 5000))
             
             await close_modals(page)
             await click_continue_if_exists(page)
             await emulate_human_behavior(page)
             
-            print("[SUCCESS] Объявление загружено")
+            print("[SUCCESS] ✅ Объявление загружено")
         except Exception as e:
-            print(f"[ERROR] Ошибка: {e}")
-            await browser.close()
-            return {'error': 'load_failed', 'message': str(e)}
+            print(f"[ERROR] ❌ Ошибка: {e}")
         
         try:
             await context.storage_state(path=COOKIES_FILE)
@@ -188,9 +177,9 @@ async def parse_avito(url: str):
         )
         
         if is_blocked:
-            print("[WARNING] Блокировка")
+            print("[WARNING] ⚠️ Блокировка")
             await browser.close()
-            return {'error': 'blocked', 'message': 'Avito заблокировал'}
+            return {'error': 'blocked', 'message': 'Avito заблокировал', 'proxy': 'Bright Data (Kazakhstan)'}
         
         flat = {}
         
@@ -235,40 +224,25 @@ async def parse_avito(url: str):
             pass
         flat['params'] = params
 
-        try:
-            photo_urls = []
-            imgs = await page.query_selector_all('img[src*="avito.st"]')
-            for img in imgs:
-                src = await img.get_attribute('src')
-                if src and '.jpg' in src:
-                    clean_url = src.split('?')[0]
-                    if len(clean_url) > 50:
-                        photo_urls.append(clean_url)
-            flat['photos'] = list(set(photo_urls))
-        except:
-            flat['photos'] = []
+        flat['photos'] = []  # Отключаем для экономии трафика
+        flat['proxy'] = 'Bright Data (Kazakhstan 🇰🇿)'
 
         await browser.close()
         return flat
 
 async def parse_cian(url: str):
+    # Циан БЕЗ прокси (работает напрямую)
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True, 
-            args=['--no-sandbox', '--disable-dev-shm-usage']
+        browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            viewport={"width": 1920, "height": 1080},
+            locale="ru-RU"
         )
         
-        context_options = {
-            "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "viewport": {"width": 1280, "height": 720},
-            "locale": "ru-RU"
-        }
+        # Блокировка картинок
+        await context.route('**/*.{png,jpg,jpeg,gif,webp,svg}', lambda route: route.abort())
         
-        # ✅ ПРОКСИ ДЛЯ CIAN
-        if PROXY_CONFIG:
-            context_options["proxy"] = PROXY_CONFIG
-        
-        context = await browser.new_context(**context_options)
         page = await context.new_page()
         page.set_default_timeout(60000)
         
@@ -347,28 +321,22 @@ async def parse_cian(url: str):
         except: 
             flat['description'] = None
 
-        try:
-            photo_urls = []
-            thumb_imgs = await page.query_selector_all('[data-name="PaginationThumbsComponent"] img')
-            for img in thumb_imgs:
-                src = await img.get_attribute('src')
-                if src and 'cdn-cian.ru/images' in src:
-                    full_src = src.replace('-2.jpg', '-1.jpg')
-                    if full_src not in photo_urls:
-                        photo_urls.append(full_src)
-            flat['photos'] = photo_urls
-        except:
-            flat['photos'] = []
+        flat['photos'] = []  # Отключаем для экономии
+        flat['proxy'] = 'Direct (no proxy)'
 
         await browser.close()
         return flat
 
 @app.get("/")
 async def root():
-    proxy_status = "✅ Enabled" if PROXY_CONFIG else "❌ Disabled"
     return {
-        "service": "Парсер Avito & Cian (Playwright) 🚀",
-        "proxy": proxy_status,
+        "service": "Парсер Avito & Cian (Playwright + Bright Data) 🚀",
+        "proxy": {
+            "provider": "Bright Data",
+            "country": "Kazakhstan 🇰🇿",
+            "server": PROXY_CONFIG['server'],
+            "status": "Active" if PROXY_CONFIG['password'] else "Not configured"
+        },
         "cookies_loaded": os.path.exists(COOKIES_FILE),
         "endpoints": {
             "POST /parse": "Парсить {\"url\": \"https://...\"}"
@@ -398,4 +366,4 @@ async def parse_flat(request: ParseRequest):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port, timeout_keep_alive=300)
+    uvicorn.run(app, host="0.0.0.0", port=port)
