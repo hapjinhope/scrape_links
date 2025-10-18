@@ -1,134 +1,232 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl
-import time
-import re
-import os
-import ssl
-import undetected_chromedriver as uc
-from selenium.webdriver.common.by import By
-from playwright.async_api import async_playwright
 import asyncio
+import re
+from playwright.async_api import async_playwright
+import random
+import os
 
-app = FastAPI(title="Парсер квартир Avito (Selenium) & Cian (Playwright)")
+app = FastAPI(title="Парсер квартир Avito & Cian")
 
 class ParseRequest(BaseModel):
     url: HttpUrl
 
-ssl._create_default_https_context = ssl._create_unverified_context
+COOKIES_FILE = "avito_session.json"
 
-def close_modal_selenium(driver):
-    """Закрытие модальных окон"""
+async def human_like_mouse_move(page, from_x, from_y, to_x, to_y):
+    steps = random.randint(15, 30)
+    for i in range(steps):
+        progress = i / steps
+        curve = random.uniform(-10, 10)
+        x = from_x + (to_x - from_x) * progress + curve
+        y = from_y + (to_y - from_y) * progress + curve
+        await page.mouse.move(x, y)
+        await asyncio.sleep(random.uniform(0.01, 0.03))
+
+async def emulate_human_behavior(page):
+    start_x, start_y = random.randint(100, 300), random.randint(100, 300)
+    end_x, end_y = random.randint(400, 800), random.randint(200, 600)
+    await human_like_mouse_move(page, start_x, start_y, end_x, end_y)
+    
+    await asyncio.sleep(random.uniform(0.5, 1.5))
+    
+    for _ in range(random.randint(2, 4)):
+        scroll_amount = random.randint(150, 400)
+        if random.random() < 0.3:
+            scroll_amount = -scroll_amount
+        await page.evaluate(f'window.scrollBy(0, {scroll_amount})')
+        await asyncio.sleep(random.uniform(0.8, 2.0))
+    
+    for _ in range(random.randint(2, 5)):
+        jitter_x = end_x + random.randint(-5, 5)
+        jitter_y = end_y + random.randint(-5, 5)
+        await page.mouse.move(jitter_x, jitter_y)
+        await asyncio.sleep(random.uniform(0.1, 0.3))
+
+async def close_modals(page):
     try:
         selectors = [
-            ".modal-close", 
-            ".close", 
-            "[aria-label='Закрыть']", 
+            "button:has-text('Не интересно')",
+            "[data-marker*='modal/close']",
+            ".modal__close",
             "button[aria-label='Закрыть']",
-            "[data-marker*='modal/close']"
         ]
-        for sel in selectors:
-            try:
-                btn = driver.find_element(By.CSS_SELECTOR, sel)
-                btn.click()
-                print(f"[INFO] Модальное окно закрыто: {sel}")
-                time.sleep(1)
+        for selector in selectors:
+            button = await page.query_selector(selector)
+            if button:
+                await button.click()
+                await asyncio.sleep(1)
                 return True
-            except:
-                continue
         return False
     except:
         return False
 
-def parse_avito_selenium(url: str):
-    """Парсер Avito через Selenium + undetected-chromedriver"""
-    print(f"[INFO] Запуск Selenium для: {url}")
-    
+async def click_continue_if_exists(page):
     try:
-        options = uc.ChromeOptions()
-        options.add_argument('--headless')
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-blink-features=AutomationControlled')
+        selectors = [
+            "button:has-text('Продолжить')",
+            "[data-marker*='continue']",
+        ]
+        for selector in selectors:
+            button = await page.query_selector(selector)
+            if button:
+                box = await button.bounding_box()
+                if box:
+                    click_x = box['x'] + box['width'] * random.uniform(0.3, 0.7)
+                    click_y = box['y'] + box['height'] * random.uniform(0.3, 0.7)
+                    await page.mouse.move(click_x, click_y)
+                    await asyncio.sleep(random.uniform(0.3, 0.8))
+                    await page.mouse.click(click_x, click_y)
+                    await asyncio.sleep(5)
+                    return True
+        return False
+    except:
+        return False
+
+async def parse_avito(url: str):
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--window-size=1920,1080',
+                '--lang=ru-RU',
+            ],
+            timeout=90000
+        )
         
-        driver = uc.Chrome(options=options, use_subprocess=True, version_main=None)
+        context_options = {
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "viewport": {"width": 1920, "height": 1080},
+            "locale": "ru-RU",
+            "timezone_id": "Europe/Moscow",
+            "geolocation": {"longitude": 37.6173, "latitude": 55.7558},
+            "permissions": ["geolocation"],
+        }
         
-        print("[INFO] Переход на объявление...")
-        driver.get(url)
-        time.sleep(5)  # Ждём загрузки
+        if os.path.exists(COOKIES_FILE):
+            print(f"[INFO] 🍪 Загружаю cookies")
+            context_options["storage_state"] = COOKIES_FILE
         
-        # Закрываем модалки
-        close_modal_selenium(driver)
-        time.sleep(1)
+        context = await browser.new_context(**context_options)
         
-        # Проверка блокировки
-        page_source = driver.page_source.lower()
-        if 'доступ ограничен' in page_source or 'access denied' in page_source:
-            print("[WARNING] Блокировка обнаружена")
-            driver.quit()
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [
+                    {name: 'Chrome PDF Plugin'},
+                    {name: 'Chrome PDF Viewer'},
+                    {name: 'Native Client'}
+                ],
+            });
+            Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru'] });
+            window.chrome = { runtime: {} };
+        """)
+        
+        await context.set_extra_http_headers({
+            "Accept-Language": "ru-RU,ru;q=0.9",
+            "Referer": "https://www.google.com/",
+        })
+        
+        page = await context.new_page()
+        page.set_default_timeout(90000)
+        
+        try:
+            print(f"[INFO] Переход на объявление...")
+            await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+            await page.wait_for_timeout(random.randint(3000, 5000))
+            
+            await close_modals(page)
+            await click_continue_if_exists(page)
+            await emulate_human_behavior(page)
+            
+            print("[SUCCESS] Объявление загружено")
+        except Exception as e:
+            print(f"[ERROR] Ошибка: {e}")
+        
+        try:
+            await context.storage_state(path=COOKIES_FILE)
+        except:
+            pass
+        
+        html = await page.content()
+        title = await page.title()
+        
+        is_blocked = (
+            'доступ ограничен' in html.lower() or
+            'access denied' in html.lower() or
+            'captcha' in title.lower()
+        )
+        
+        if is_blocked:
+            print("[WARNING] Блокировка")
+            await browser.close()
             return {'error': 'blocked', 'message': 'Avito заблокировал'}
         
-        # Парсинг
         flat = {}
         
-        def safe_find(selector, by=By.CSS_SELECTOR):
-            try:
-                elem = driver.find_element(by, selector)
-                return elem.text.strip()
-            except:
-                return None
-        
-        flat['title'] = safe_find('[data-marker="item-view/title-info"]') or safe_find('h1')
-        flat['price'] = safe_find('[data-marker="item-view/item-price"]')
-        flat['address'] = safe_find('[data-marker="item-view/location-address"]')
-        flat['description'] = safe_find('[data-marker="item-view/item-description"]')
-        
-        # Параметры
+        try:
+            title_elem = await page.query_selector('[data-marker="item-view/title-info"], h1')
+            flat['title'] = (await title_elem.inner_text()).strip() if title_elem else None
+        except: 
+            flat['title'] = None
+
+        try:
+            price_elem = await page.query_selector('[data-marker="item-view/item-price"]')
+            flat['price'] = (await price_elem.inner_text()).strip() if price_elem else None
+        except: 
+            flat['price'] = None
+
+        try:
+            addr_elem = await page.query_selector('[data-marker="item-view/location-address"]')
+            flat['address'] = (await addr_elem.inner_text()).strip() if addr_elem else None
+        except: 
+            flat['address'] = None
+
+        try:
+            desc_elem = await page.query_selector('[data-marker="item-view/item-description"]')
+            flat['description'] = (await desc_elem.inner_text()).strip() if desc_elem else None
+        except: 
+            flat['description'] = None
+
         params = {}
         try:
-            param_sections = driver.find_elements(By.CSS_SELECTOR, '[data-marker="item-view/item-params"]')
-            for section in param_sections:
-                items = section.find_elements(By.TAG_NAME, 'li')
+            params_sections = await page.query_selector_all('[data-marker="item-view/item-params"]')
+            for section in params_sections:
+                items = await section.query_selector_all('li')
                 for item in items:
                     try:
-                        text = item.text.strip()
+                        text = (await item.inner_text()).strip()
                         if ':' in text:
                             key, value = text.split(':', 1)
                             params[key.strip()] = value.strip()
-                    except:
+                    except: 
                         continue
-        except:
+        except: 
             pass
         flat['params'] = params
-        
-        # Фото
-        photos = []
+
         try:
-            imgs = driver.find_elements(By.CSS_SELECTOR, 'img[src*="avito.st"]')
+            photo_urls = []
+            imgs = await page.query_selector_all('img[src*="avito.st"]')
             for img in imgs:
-                src = img.get_attribute('src')
+                src = await img.get_attribute('src')
                 if src and '.jpg' in src:
                     clean_url = src.split('?')[0]
-                    if len(clean_url) > 50 and clean_url not in photos:
-                        photos.append(clean_url)
+                    if len(clean_url) > 50:
+                        photo_urls.append(clean_url)
+            flat['photos'] = list(set(photo_urls))
         except:
-            pass
-        flat['photos'] = photos
-        
-        print("[SUCCESS] Парсинг завершён")
-        driver.quit()
+            flat['photos'] = []
+
+        await browser.close()
         return flat
-        
-    except Exception as e:
-        print(f"[ERROR] Ошибка Selenium: {e}")
-        try:
-            driver.quit()
-        except:
-            pass
-        raise HTTPException(status_code=500, detail=f"Ошибка парсинга: {str(e)}")
 
 async def parse_cian(url: str):
-    """Парсер Cian через Playwright"""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
         context = await browser.new_context(
@@ -233,9 +331,10 @@ async def parse_cian(url: str):
 @app.get("/")
 async def root():
     return {
-        "service": "Парсер Avito (Selenium) & Cian (Playwright) 🚀",
+        "service": "Парсер Avito & Cian (Playwright) 🚀",
+        "cookies_loaded": os.path.exists(COOKIES_FILE),
         "endpoints": {
-            "POST /parse": "Парсить объявление {\"url\": \"https://...\"}"
+            "POST /parse": "Парсить {\"url\": \"https://...\"}"
         }
     }
 
@@ -245,12 +344,7 @@ async def parse_flat(request: ParseRequest):
     
     try:
         if 'avito.ru' in url_str:
-            # Selenium работает синхронно, оборачиваем в executor
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                result = await asyncio.get_event_loop().run_in_executor(
-                    executor, parse_avito_selenium, url_str
-                )
+            result = await parse_avito(url_str)
             result['source'] = 'avito'
         elif 'cian.ru' in url_str:
             result = await parse_cian(url_str)
