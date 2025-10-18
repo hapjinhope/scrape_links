@@ -162,23 +162,7 @@ async def parse_avito(url: str):
         page = await context.new_page()
         page.set_default_timeout(90000)
         
-        # Главная страница
-        try:
-            print("[INFO] Загружаю главную Avito...")
-            await page.goto("https://www.avito.ru/", wait_until="domcontentloaded", timeout=90000)
-            await page.wait_for_timeout(random.randint(2000, 4000))
-            
-            await close_modals(page)
-            await click_continue_if_exists(page)
-            await emulate_human_behavior(page)
-            
-            print("[SUCCESS] Главная загружена")
-        except Exception as e:
-            print(f"[WARNING] Ошибка главной: {e}")
-        
-        await page.wait_for_timeout(random.randint(10000, 15000))
-        
-        # Объявление
+        # СРАЗУ НА ОБЪЯВЛЕНИЕ
         try:
             print(f"[INFO] Переход на объявление...")
             await page.goto(url, wait_until="domcontentloaded", timeout=90000)
@@ -370,7 +354,7 @@ async def parse_cian(url: str):
 @app.get("/")
 async def root():
     return {
-        "service": "Парсер Avito & Cian 🍪",
+        "service": "Парсер Avito & Cian 🚀",
         "cookies_loaded": os.path.exists(COOKIES_FILE),
         "endpoints": {
             "POST /parse": "Парсить объявление {\"url\": \"https://...\"}"
