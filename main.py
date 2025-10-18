@@ -1,261 +1,134 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl
-import asyncio
+import time
 import re
-from playwright.async_api import async_playwright
-import random
 import os
+import ssl
+import undetected_chromedriver as uc
+from selenium.webdriver.common.by import By
+from playwright.async_api import async_playwright
+import asyncio
 
-app = FastAPI(title="Парсер квартир Avito & Cian")
+app = FastAPI(title="Парсер квартир Avito (Selenium) & Cian (Playwright)")
 
 class ParseRequest(BaseModel):
     url: HttpUrl
 
-COOKIES_FILE = "avito_session.json"
+ssl._create_default_https_context = ssl._create_unverified_context
 
-async def human_like_mouse_move(page, from_x, from_y, to_x, to_y):
-    steps = random.randint(15, 30)
-    for i in range(steps):
-        progress = i / steps
-        curve = random.uniform(-10, 10)
-        x = from_x + (to_x - from_x) * progress + curve
-        y = from_y + (to_y - from_y) * progress + curve
-        await page.mouse.move(x, y)
-        await asyncio.sleep(random.uniform(0.01, 0.03))
-
-async def emulate_human_behavior(page):
-    start_x, start_y = random.randint(100, 300), random.randint(100, 300)
-    end_x, end_y = random.randint(400, 800), random.randint(200, 600)
-    await human_like_mouse_move(page, start_x, start_y, end_x, end_y)
-    
-    await asyncio.sleep(random.uniform(0.5, 1.5))
-    
-    for _ in range(random.randint(2, 4)):
-        scroll_amount = random.randint(150, 400)
-        if random.random() < 0.3:
-            scroll_amount = -scroll_amount
-        await page.evaluate(f'window.scrollBy(0, {scroll_amount})')
-        await asyncio.sleep(random.uniform(0.8, 2.0))
-    
-    for _ in range(random.randint(2, 5)):
-        jitter_x = end_x + random.randint(-5, 5)
-        jitter_y = end_y + random.randint(-5, 5)
-        await page.mouse.move(jitter_x, jitter_y)
-        await asyncio.sleep(random.uniform(0.1, 0.3))
-
-async def close_modals(page):
+def close_modal_selenium(driver):
+    """Закрытие модальных окон"""
     try:
         selectors = [
-            "button:has-text('Не интересно')",
-            "[data-marker*='modal/close']",
-            ".modal__close",
+            ".modal-close", 
+            ".close", 
+            "[aria-label='Закрыть']", 
             "button[aria-label='Закрыть']",
+            "[data-marker*='modal/close']"
         ]
-        for selector in selectors:
-            button = await page.query_selector(selector)
-            if button:
-                await button.click()
-                await asyncio.sleep(1)
+        for sel in selectors:
+            try:
+                btn = driver.find_element(By.CSS_SELECTOR, sel)
+                btn.click()
+                print(f"[INFO] Модальное окно закрыто: {sel}")
+                time.sleep(1)
                 return True
+            except:
+                continue
         return False
     except:
         return False
 
-async def click_continue_if_exists(page):
+def parse_avito_selenium(url: str):
+    """Парсер Avito через Selenium + undetected-chromedriver"""
+    print(f"[INFO] Запуск Selenium для: {url}")
+    
     try:
-        selectors = [
-            "button:has-text('Продолжить')",
-            "[data-marker*='continue']",
-        ]
-        for selector in selectors:
-            button = await page.query_selector(selector)
-            if button:
-                box = await button.bounding_box()
-                if box:
-                    click_x = box['x'] + box['width'] * random.uniform(0.3, 0.7)
-                    click_y = box['y'] + box['height'] * random.uniform(0.3, 0.7)
-                    await page.mouse.move(click_x, click_y)
-                    await asyncio.sleep(random.uniform(0.3, 0.8))
-                    await page.mouse.click(click_x, click_y)
-                    await asyncio.sleep(5)
-                    return True
-        return False
-    except:
-        return False
-
-async def parse_avito(url: str):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-blink-features=AutomationControlled',
-                '--disable-dev-shm-usage',
-                '--window-size=1920,1080',
-                '--lang=ru-RU',
-            ],
-            timeout=90000
-        )
+        options = uc.ChromeOptions()
+        options.add_argument('--headless')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-blink-features=AutomationControlled')
         
-        context_options = {
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "viewport": {"width": 1920, "height": 1080},
-            "locale": "ru-RU",
-            "timezone_id": "Europe/Moscow",
-            "geolocation": {"longitude": 37.6173, "latitude": 55.7558},
-            "permissions": ["geolocation"],
-        }
+        driver = uc.Chrome(options=options, use_subprocess=True, version_main=None)
         
-        if os.path.exists(COOKIES_FILE):
-            print(f"[INFO] 🍪 Загружаю cookies из {COOKIES_FILE}")
-            context_options["storage_state"] = COOKIES_FILE
+        print("[INFO] Переход на объявление...")
+        driver.get(url)
+        time.sleep(5)  # Ждём загрузки
         
-        context = await browser.new_context(**context_options)
+        # Закрываем модалки
+        close_modal_selenium(driver)
+        time.sleep(1)
         
-        await context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => false });
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [
-                    {name: 'Chrome PDF Plugin', description: 'Portable Document Format', filename: 'internal-pdf-viewer'},
-                    {name: 'Chrome PDF Viewer', description: '', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai'},
-                    {name: 'Native Client', description: '', filename: 'internal-nacl-plugin'}
-                ],
-            });
-            Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru'] });
-            Object.defineProperty(navigator, 'language', { get: () => 'ru-RU' });
-            Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-            window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {} };
-            
-            const getParameter = WebGLRenderingContext.prototype.getParameter;
-            WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                if (parameter === 37445) return 'Intel Inc.';
-                if (parameter === 37446) return 'Intel Iris OpenGL Engine';
-                return getParameter.call(this, parameter);
-            };
-            
-            const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
-            HTMLCanvasElement.prototype.toDataURL = function(type) {
-                const context = this.getContext('2d');
-                if (context) {
-                    const imageData = context.getImageData(0, 0, this.width, this.height);
-                    for (let i = 0; i < imageData.data.length; i += 4) {
-                        imageData.data[i] += Math.floor(Math.random() * 3) - 1;
-                        imageData.data[i+1] += Math.floor(Math.random() * 3) - 1;
-                        imageData.data[i+2] += Math.floor(Math.random() * 3) - 1;
-                    }
-                    context.putImageData(imageData, 0, 0);
-                }
-                return originalToDataURL.apply(this, arguments);
-            };
-            
-            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-        """)
-        
-        await context.set_extra_http_headers({
-            "Accept-Language": "ru-RU,ru;q=0.9",
-            "Referer": "https://www.google.com/",
-        })
-        
-        page = await context.new_page()
-        page.set_default_timeout(90000)
-        
-        # СРАЗУ НА ОБЪЯВЛЕНИЕ
-        try:
-            print(f"[INFO] Переход на объявление...")
-            await page.goto(url, wait_until="domcontentloaded", timeout=90000)
-            await page.wait_for_timeout(random.randint(3000, 5000))
-            
-            await close_modals(page)
-            await click_continue_if_exists(page)
-            await emulate_human_behavior(page)
-            
-            print("[SUCCESS] Объявление загружено")
-        except Exception as e:
-            print(f"[ERROR] Ошибка объявления: {e}")
-        
-        try:
-            await context.storage_state(path=COOKIES_FILE)
-            print(f"[INFO] 🍪 Cookies обновлены")
-        except:
-            pass
-        
-        html = await page.content()
-        title = await page.title()
-        
-        is_blocked = (
-            'доступ ограничен' in html.lower() or
-            'access denied' in html.lower() or
-            'captcha' in title.lower()
-        )
-        
-        if is_blocked:
-            print("[WARNING] Блокировка!")
-            await browser.close()
+        # Проверка блокировки
+        page_source = driver.page_source.lower()
+        if 'доступ ограничен' in page_source or 'access denied' in page_source:
+            print("[WARNING] Блокировка обнаружена")
+            driver.quit()
             return {'error': 'blocked', 'message': 'Avito заблокировал'}
         
+        # Парсинг
         flat = {}
         
-        try:
-            title_elem = await page.query_selector('[data-marker="item-view/title-info"], h1')
-            flat['title'] = (await title_elem.inner_text()).strip() if title_elem else None
-        except: 
-            flat['title'] = None
-
-        try:
-            price_elem = await page.query_selector('[data-marker="item-view/item-price"]')
-            flat['price'] = (await price_elem.inner_text()).strip() if price_elem else None
-        except: 
-            flat['price'] = None
-
-        try:
-            addr_elem = await page.query_selector('[data-marker="item-view/location-address"]')
-            flat['address'] = (await addr_elem.inner_text()).strip() if addr_elem else None
-        except: 
-            flat['address'] = None
-
-        try:
-            desc_elem = await page.query_selector('[data-marker="item-view/item-description"]')
-            flat['description'] = (await desc_elem.inner_text()).strip() if desc_elem else None
-        except: 
-            flat['description'] = None
-
+        def safe_find(selector, by=By.CSS_SELECTOR):
+            try:
+                elem = driver.find_element(by, selector)
+                return elem.text.strip()
+            except:
+                return None
+        
+        flat['title'] = safe_find('[data-marker="item-view/title-info"]') or safe_find('h1')
+        flat['price'] = safe_find('[data-marker="item-view/item-price"]')
+        flat['address'] = safe_find('[data-marker="item-view/location-address"]')
+        flat['description'] = safe_find('[data-marker="item-view/item-description"]')
+        
+        # Параметры
         params = {}
         try:
-            params_sections = await page.query_selector_all('[data-marker="item-view/item-params"]')
-            for section in params_sections:
-                items = await section.query_selector_all('li')
+            param_sections = driver.find_elements(By.CSS_SELECTOR, '[data-marker="item-view/item-params"]')
+            for section in param_sections:
+                items = section.find_elements(By.TAG_NAME, 'li')
                 for item in items:
                     try:
-                        text = (await item.inner_text()).strip()
+                        text = item.text.strip()
                         if ':' in text:
                             key, value = text.split(':', 1)
                             params[key.strip()] = value.strip()
-                    except: 
+                    except:
                         continue
-        except: 
+        except:
             pass
         flat['params'] = params
-
+        
+        # Фото
+        photos = []
         try:
-            photo_urls = []
-            imgs = await page.query_selector_all('img[src*="avito.st"]')
+            imgs = driver.find_elements(By.CSS_SELECTOR, 'img[src*="avito.st"]')
             for img in imgs:
-                src = await img.get_attribute('src')
+                src = img.get_attribute('src')
                 if src and '.jpg' in src:
                     clean_url = src.split('?')[0]
-                    if len(clean_url) > 50:
-                        photo_urls.append(clean_url)
-            flat['photos'] = list(set(photo_urls))
+                    if len(clean_url) > 50 and clean_url not in photos:
+                        photos.append(clean_url)
         except:
-            flat['photos'] = []
-
-        await browser.close()
+            pass
+        flat['photos'] = photos
+        
+        print("[SUCCESS] Парсинг завершён")
+        driver.quit()
         return flat
+        
+    except Exception as e:
+        print(f"[ERROR] Ошибка Selenium: {e}")
+        try:
+            driver.quit()
+        except:
+            pass
+        raise HTTPException(status_code=500, detail=f"Ошибка парсинга: {str(e)}")
 
 async def parse_cian(url: str):
+    """Парсер Cian через Playwright"""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
         context = await browser.new_context(
@@ -284,7 +157,8 @@ async def parse_cian(url: str):
         try:
             price_el = await page.query_selector("[data-testid='price-amount']")
             flat['price'] = (await price_el.inner_text()).strip() if price_el else None
-        except: flat['price'] = None
+        except: 
+            flat['price'] = None
 
         try:
             addr_items = await page.query_selector_all('[data-name="AddressItem"]')
@@ -292,14 +166,16 @@ async def parse_cian(url: str):
             for item in addr_items:
                 address_parts.append((await item.inner_text()).strip())
             flat['address'] = ', '.join(address_parts) if address_parts else None
-        except: flat['address'] = None
+        except: 
+            flat['address'] = None
 
         try:
             metros = []
             for elem in await page.query_selector_all('[data-name="UndergroundItem"] a'):
                 metros.append((await elem.inner_text()).strip())
             flat['metro'] = metros
-        except: flat['metro'] = []
+        except: 
+            flat['metro'] = []
 
         params = {}
         try:
@@ -312,9 +188,10 @@ async def parse_cian(url: str):
                         key = (await label_el.inner_text()).strip()
                         value = (await value_el.inner_text()).strip()
                         params[key] = value
-                except: continue
-        except: pass
-        
+                except: 
+                    continue
+        except: 
+            pass
         flat['params'] = params
 
         try:
@@ -325,7 +202,8 @@ async def parse_cian(url: str):
                     feature_text = (await item.inner_text()).strip()
                     if feature_text:
                         features.append(feature_text)
-                except: continue
+                except: 
+                    continue
             flat['features'] = features
         except:
             flat['features'] = []
@@ -333,7 +211,8 @@ async def parse_cian(url: str):
         try:
             desc_el = await page.query_selector("[data-mark='Description']")
             flat['description'] = (await desc_el.inner_text()).strip() if desc_el else None
-        except: flat['description'] = None
+        except: 
+            flat['description'] = None
 
         try:
             photo_urls = []
@@ -354,8 +233,7 @@ async def parse_cian(url: str):
 @app.get("/")
 async def root():
     return {
-        "service": "Парсер Avito & Cian 🚀",
-        "cookies_loaded": os.path.exists(COOKIES_FILE),
+        "service": "Парсер Avito (Selenium) & Cian (Playwright) 🚀",
         "endpoints": {
             "POST /parse": "Парсить объявление {\"url\": \"https://...\"}"
         }
@@ -367,7 +245,12 @@ async def parse_flat(request: ParseRequest):
     
     try:
         if 'avito.ru' in url_str:
-            result = await parse_avito(url_str)
+            # Selenium работает синхронно, оборачиваем в executor
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                result = await asyncio.get_event_loop().run_in_executor(
+                    executor, parse_avito_selenium, url_str
+                )
             result['source'] = 'avito'
         elif 'cian.ru' in url_str:
             result = await parse_cian(url_str)
