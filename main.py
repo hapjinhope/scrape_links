@@ -116,8 +116,7 @@ async def parse_avito(url: str):
             await page.mouse.move(random.randint(100, 800), random.randint(100, 600))
             await page.wait_for_timeout(random.randint(500, 1500))
             await page.evaluate('window.scrollTo(0, 300)')
-            print("[INFO] Ожидание перед переходом на объявление (10-15 сек)")
-            await page.wait_for_timeout(random.randint(10000, 15000))
+            
 
 # Плюс больше активности на главной
             for _ in range(5):
@@ -129,12 +128,10 @@ async def parse_avito(url: str):
             print("[SUCCESS] Главная загружена")
         except Exception as e:
             print(f"[WARNING] Ошибка главной: {e}")
-
-            print("[INFO] Переход в каталог квартир")
-            await page.goto("https://www.avito.ru/moskva/kvartiry", wait_until="domcontentloaded")
-            await page.wait_for_timeout(random.randint(5000, 8000))
-            await emulate_human_behavior(page)
         
+        print("[INFO] Ожидание перед переходом на объявление (10-15 сек)")
+        await page.wait_for_timeout(random.randint(10000, 15000))
+
         # 2. ОБЪЯВЛЕНИЕ
         try:
             print(f"[INFO] Переход на объявление...")
