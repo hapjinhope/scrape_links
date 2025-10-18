@@ -13,8 +13,6 @@ class ParseRequest(BaseModel):
     url: HttpUrl
 
 COOKIES_FILE = "avito_session.json"
-
-# ===== MOBILE USER-AGENT =====
 MOBILE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
 
 async def human_like_mouse_move(page, from_x, from_y, to_x, to_y):
@@ -31,16 +29,13 @@ async def emulate_human_behavior(page):
     start_x, start_y = random.randint(50, 150), random.randint(100, 300)
     end_x, end_y = random.randint(200, 350), random.randint(400, 700)
     await human_like_mouse_move(page, start_x, start_y, end_x, end_y)
-    
     await asyncio.sleep(random.uniform(0.5, 1.0))
-    
     for _ in range(random.randint(3, 5)):
         scroll_amount = random.randint(200, 500)
         if random.random() < 0.2:
             scroll_amount = -scroll_amount
         await page.evaluate(f'window.scrollBy(0, {scroll_amount})')
         await asyncio.sleep(random.uniform(0.5, 1.5))
-    
     for _ in range(random.randint(1, 3)):
         jitter_x = end_x + random.randint(-3, 3)
         jitter_y = end_y + random.randint(-3, 3)
@@ -88,7 +83,7 @@ async def click_continue_if_exists(page):
         return False
 
 async def parse_avito(url: str):
-    """Парсинг Avito с MOBILE режимом (iPhone 14 Pro)"""
+    """Парсинг Avito: Mobile режим + Cookies + Переход через главную"""
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -97,20 +92,19 @@ async def parse_avito(url: str):
                 '--disable-setuid-sandbox',
                 '--disable-blink-features=AutomationControlled',
                 '--disable-dev-shm-usage',
-                '--window-size=390,844',  # ✅ Mobile size
+                '--window-size=390,844',
                 '--lang=ru-RU',
                 f'--user-agent={MOBILE_UA}',
             ],
             timeout=90000
         )
         
-        # ✅ MOBILE CONTEXT
         context_options = {
             "user_agent": MOBILE_UA,
             "viewport": {"width": 390, "height": 844},
             "device_scale_factor": 3,
-            "is_mobile": True,  # ✅
-            "has_touch": True,  # ✅
+            "is_mobile": True,
+            "has_touch": True,
             "locale": "ru-RU",
             "timezone_id": "Europe/Moscow",
             "geolocation": {"longitude": 37.6173, "latitude": 55.7558},
@@ -118,12 +112,13 @@ async def parse_avito(url: str):
         }
         
         if os.path.exists(COOKIES_FILE):
-            print(f"[INFO] 🍪 Загружаю cookies")
+            print(f"[INFO] 🍪 Загружаю cookies из {COOKIES_FILE}")
             context_options["storage_state"] = COOKIES_FILE
+        else:
+            print(f"[WARNING] ⚠️ Cookies не найдены")
         
         context = await browser.new_context(**context_options)
         
-        # ✅ MOBILE ANTI-DETECTION
         await context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
             Object.defineProperty(navigator, 'platform', { get: () => 'iPhone' });
@@ -132,19 +127,16 @@ async def parse_avito(url: str):
             Object.defineProperty(navigator, 'plugins', { get: () => [] });
             Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'en-US'] });
             window.ontouchstart = null;
-            
             const getParameter = WebGLRenderingContext.prototype.getParameter;
             WebGLRenderingContext.prototype.getParameter = function(parameter) {
                 if (parameter === 37445) return 'Apple Inc.';
                 if (parameter === 37446) return 'Apple GPU';
                 return getParameter.call(this, parameter);
             };
-            
             Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 });
             Object.defineProperty(navigator, 'deviceMemory', { get: () => 6 });
         """)
         
-        # ✅ MOBILE HEADERS
         await context.set_extra_http_headers({
             "Accept-Language": "ru-RU,ru;q=0.9",
             "sec-ch-ua-mobile": "?1",
@@ -155,26 +147,37 @@ async def parse_avito(url: str):
         page = await context.new_page()
         page.set_default_timeout(90000)
         
+        # ШАГ 1: ГЛАВНАЯ
         try:
-            print(f"[INFO] 📱 Mobile: Переход на объявление...")
-            
-            # ✅ Используем МОБИЛЬНЫЙ URL
-            mobile_url = url.replace("www.avito.ru", "m.avito.ru")
-            print(f"[DEBUG] Mobile URL: {mobile_url}")
-            
-            await page.goto(mobile_url, wait_until="domcontentloaded", timeout=90000)
-            await page.wait_for_timeout(random.randint(3000, 5000))
-            
+            print(f"[INFO] 🏠 Шаг 1/2: Загружаю главную (m.avito.ru)")
+            await page.goto("https://m.avito.ru/", wait_until="domcontentloaded", timeout=90000)
+            await page.wait_for_timeout(random.randint(2000, 4000))
             await close_modals(page)
             await click_continue_if_exists(page)
             await emulate_human_behavior(page)
-            
-            print("[SUCCESS] ✅ Объявление загружено (mobile)")
+            print("[SUCCESS] ✅ Главная загружена")
+            await page.wait_for_timeout(random.randint(1000, 2000))
+        except Exception as e:
+            print(f"[WARNING] ⚠️ Ошибка главной: {e}")
+        
+        # ШАГ 2: ОБЪЯВЛЕНИЕ
+        try:
+            print(f"[INFO] 📱 Шаг 2/2: Переход на объявление")
+            mobile_url = url.replace("www.avito.ru", "m.avito.ru")
+            print(f"[DEBUG] Mobile URL: {mobile_url}")
+            await page.goto(mobile_url, wait_until="domcontentloaded", timeout=90000)
+            await page.wait_for_timeout(random.randint(3000, 5000))
+            await close_modals(page)
+            await asyncio.sleep(1)
+            await click_continue_if_exists(page)
+            await emulate_human_behavior(page)
+            print("[SUCCESS] ✅ Объявление загружено")
         except Exception as e:
             print(f"[ERROR] ❌ Ошибка: {e}")
         
         try:
             await context.storage_state(path=COOKIES_FILE)
+            print("[INFO] 🍪 Cookies обновлены")
         except:
             pass
         
@@ -188,13 +191,12 @@ async def parse_avito(url: str):
         )
         
         if is_blocked:
-            print("[WARNING] ⚠️ Блокировка (mobile)")
+            print("[WARNING] ⚠️ Блокировка")
             await browser.close()
-            return {'error': 'blocked', 'message': 'Avito заблокировал (mobile)'}
+            return {'error': 'blocked', 'message': 'Avito заблокировал'}
         
         flat = {}
         
-        # ✅ MOBILE SELECTORS (поддержка desktop + mobile)
         try:
             title_selectors = [
                 '[data-marker="item-view/title-info"]',
@@ -290,13 +292,14 @@ async def parse_avito(url: str):
         except:
             flat['photos'] = []
 
-        flat['parsed_mode'] = 'mobile'  # ✅ Флаг
+        flat['parsed_mode'] = 'mobile'
+        flat['cookies_used'] = os.path.exists(COOKIES_FILE)
 
         await browser.close()
         return flat
 
 async def parse_cian(url: str):
-    """Парсинг Cian (без изменений)"""
+    """Парсинг Cian (Desktop режим)"""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
         context = await browser.new_context(
@@ -404,7 +407,7 @@ async def parse_cian(url: str):
 async def root():
     return {
         "service": "Парсер Avito (Mobile 📱) & Cian 🚀",
-        "avito_mode": "Mobile (iPhone 14 Pro)",
+        "avito_mode": "Mobile (iPhone 14 Pro) + Cookies + Homepage visit",
         "cookies_loaded": os.path.exists(COOKIES_FILE),
         "endpoints": {
             "POST /parse": "Парсить {\"url\": \"https://...\"}"
