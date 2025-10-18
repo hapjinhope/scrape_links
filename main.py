@@ -14,42 +14,38 @@ class ParseRequest(BaseModel):
 
 COOKIES_FILE = "avito_session.json"
 
-# ✅ Bright Data прокси креды
-PROXY_CONFIG = {
-    "server": os.getenv("PROXY_SERVER", "brd.superproxy.io:33335"),
-    "username": os.getenv("PROXY_USERNAME", "brd-customer-hl_e57b9d94-zone-residential_proxy1"),
-    "password": os.getenv("PROXY_PASSWORD", "wh9kp18xt2ot")
-}
+# ===== MOBILE USER-AGENT =====
+MOBILE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
 
 async def human_like_mouse_move(page, from_x, from_y, to_x, to_y):
-    steps = random.randint(15, 30)
+    steps = random.randint(10, 20)
     for i in range(steps):
         progress = i / steps
-        curve = random.uniform(-10, 10)
+        curve = random.uniform(-5, 5)
         x = from_x + (to_x - from_x) * progress + curve
         y = from_y + (to_y - from_y) * progress + curve
         await page.mouse.move(x, y)
-        await asyncio.sleep(random.uniform(0.01, 0.03))
+        await asyncio.sleep(random.uniform(0.02, 0.05))
 
 async def emulate_human_behavior(page):
-    start_x, start_y = random.randint(100, 300), random.randint(100, 300)
-    end_x, end_y = random.randint(400, 800), random.randint(200, 600)
+    start_x, start_y = random.randint(50, 150), random.randint(100, 300)
+    end_x, end_y = random.randint(200, 350), random.randint(400, 700)
     await human_like_mouse_move(page, start_x, start_y, end_x, end_y)
     
-    await asyncio.sleep(random.uniform(0.5, 1.5))
+    await asyncio.sleep(random.uniform(0.5, 1.0))
     
-    for _ in range(random.randint(2, 4)):
-        scroll_amount = random.randint(150, 400)
-        if random.random() < 0.3:
+    for _ in range(random.randint(3, 5)):
+        scroll_amount = random.randint(200, 500)
+        if random.random() < 0.2:
             scroll_amount = -scroll_amount
         await page.evaluate(f'window.scrollBy(0, {scroll_amount})')
-        await asyncio.sleep(random.uniform(0.8, 2.0))
+        await asyncio.sleep(random.uniform(0.5, 1.5))
     
-    for _ in range(random.randint(2, 5)):
-        jitter_x = end_x + random.randint(-5, 5)
-        jitter_y = end_y + random.randint(-5, 5)
+    for _ in range(random.randint(1, 3)):
+        jitter_x = end_x + random.randint(-3, 3)
+        jitter_y = end_y + random.randint(-3, 3)
         await page.mouse.move(jitter_x, jitter_y)
-        await asyncio.sleep(random.uniform(0.1, 0.3))
+        await asyncio.sleep(random.uniform(0.1, 0.2))
 
 async def close_modals(page):
     try:
@@ -92,28 +88,32 @@ async def click_continue_if_exists(page):
         return False
 
 async def parse_avito(url: str):
+    """Парсинг Avito с MOBILE режимом (iPhone 14 Pro)"""
     async with async_playwright() as p:
-        # ✅ Добавляем прокси в launch
         browser = await p.chromium.launch(
             headless=True,
-            proxy=PROXY_CONFIG,  # ← ПРОКСИ!
             args=[
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-blink-features=AutomationControlled',
                 '--disable-dev-shm-usage',
-                '--window-size=1920,1080',
+                '--window-size=390,844',  # ✅ Mobile size
                 '--lang=ru-RU',
+                f'--user-agent={MOBILE_UA}',
             ],
             timeout=90000
         )
         
+        # ✅ MOBILE CONTEXT
         context_options = {
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "viewport": {"width": 1920, "height": 1080},
+            "user_agent": MOBILE_UA,
+            "viewport": {"width": 390, "height": 844},
+            "device_scale_factor": 3,
+            "is_mobile": True,  # ✅
+            "has_touch": True,  # ✅
             "locale": "ru-RU",
-            "timezone_id": "Asia/Almaty",  # ← Казахстан timezone!
-            "geolocation": {"longitude": 76.9286, "latitude": 43.2220},  # Алматы
+            "timezone_id": "Europe/Moscow",
+            "geolocation": {"longitude": 37.6173, "latitude": 55.7558},
             "permissions": ["geolocation"],
         }
         
@@ -123,26 +123,32 @@ async def parse_avito(url: str):
         
         context = await browser.new_context(**context_options)
         
-        # ✅ Блокировка картинок (экономия 60% трафика!)
-        await context.route('**/*.{png,jpg,jpeg,gif,webp,svg}', lambda route: route.abort())
-        await context.route('**/yandex-metrika/**', lambda route: route.abort())
-        await context.route('**/google-analytics/**', lambda route: route.abort())
-        
+        # ✅ MOBILE ANTI-DETECTION
         await context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [
-                    {name: 'Chrome PDF Plugin'},
-                    {name: 'Chrome PDF Viewer'},
-                    {name: 'Native Client'}
-                ],
-            });
-            Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'kk-KZ'] });
-            window.chrome = { runtime: {} };
+            Object.defineProperty(navigator, 'platform', { get: () => 'iPhone' });
+            Object.defineProperty(navigator, 'vendor', { get: () => 'Apple Computer, Inc.' });
+            Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 5 });
+            Object.defineProperty(navigator, 'plugins', { get: () => [] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'en-US'] });
+            window.ontouchstart = null;
+            
+            const getParameter = WebGLRenderingContext.prototype.getParameter;
+            WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                if (parameter === 37445) return 'Apple Inc.';
+                if (parameter === 37446) return 'Apple GPU';
+                return getParameter.call(this, parameter);
+            };
+            
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 });
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => 6 });
         """)
         
+        # ✅ MOBILE HEADERS
         await context.set_extra_http_headers({
-            "Accept-Language": "ru-RU,ru;q=0.9,kk;q=0.8",
+            "Accept-Language": "ru-RU,ru;q=0.9",
+            "sec-ch-ua-mobile": "?1",
+            "sec-ch-ua-platform": '"iOS"',
             "Referer": "https://www.google.com/",
         })
         
@@ -150,15 +156,20 @@ async def parse_avito(url: str):
         page.set_default_timeout(90000)
         
         try:
-            print(f"[INFO] 🚀 Переход через Bright Data (Kazakhstan)...")
-            await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+            print(f"[INFO] 📱 Mobile: Переход на объявление...")
+            
+            # ✅ Используем МОБИЛЬНЫЙ URL
+            mobile_url = url.replace("www.avito.ru", "m.avito.ru")
+            print(f"[DEBUG] Mobile URL: {mobile_url}")
+            
+            await page.goto(mobile_url, wait_until="domcontentloaded", timeout=90000)
             await page.wait_for_timeout(random.randint(3000, 5000))
             
             await close_modals(page)
             await click_continue_if_exists(page)
             await emulate_human_behavior(page)
             
-            print("[SUCCESS] ✅ Объявление загружено")
+            print("[SUCCESS] ✅ Объявление загружено (mobile)")
         except Exception as e:
             print(f"[ERROR] ❌ Ошибка: {e}")
         
@@ -177,39 +188,81 @@ async def parse_avito(url: str):
         )
         
         if is_blocked:
-            print("[WARNING] ⚠️ Блокировка")
+            print("[WARNING] ⚠️ Блокировка (mobile)")
             await browser.close()
-            return {'error': 'blocked', 'message': 'Avito заблокировал', 'proxy': 'Bright Data (Kazakhstan)'}
+            return {'error': 'blocked', 'message': 'Avito заблокировал (mobile)'}
         
         flat = {}
         
+        # ✅ MOBILE SELECTORS (поддержка desktop + mobile)
         try:
-            title_elem = await page.query_selector('[data-marker="item-view/title-info"], h1')
-            flat['title'] = (await title_elem.inner_text()).strip() if title_elem else None
+            title_selectors = [
+                '[data-marker="item-view/title-info"]',
+                'h1[itemprop="name"]',
+                'h1',
+                '.title-info-title'
+            ]
+            for selector in title_selectors:
+                title_elem = await page.query_selector(selector)
+                if title_elem:
+                    flat['title'] = (await title_elem.inner_text()).strip()
+                    break
+            if 'title' not in flat:
+                flat['title'] = None
         except: 
             flat['title'] = None
 
         try:
-            price_elem = await page.query_selector('[data-marker="item-view/item-price"]')
-            flat['price'] = (await price_elem.inner_text()).strip() if price_elem else None
+            price_selectors = [
+                '[data-marker="item-view/item-price"]',
+                '[itemprop="price"]',
+                '.js-item-price'
+            ]
+            for selector in price_selectors:
+                price_elem = await page.query_selector(selector)
+                if price_elem:
+                    flat['price'] = (await price_elem.inner_text()).strip()
+                    break
+            if 'price' not in flat:
+                flat['price'] = None
         except: 
             flat['price'] = None
 
         try:
-            addr_elem = await page.query_selector('[data-marker="item-view/location-address"]')
-            flat['address'] = (await addr_elem.inner_text()).strip() if addr_elem else None
+            addr_selectors = [
+                '[data-marker="item-view/location-address"]',
+                '[data-marker="item-address"]',
+                '.item-address'
+            ]
+            for selector in addr_selectors:
+                addr_elem = await page.query_selector(selector)
+                if addr_elem:
+                    flat['address'] = (await addr_elem.inner_text()).strip()
+                    break
+            if 'address' not in flat:
+                flat['address'] = None
         except: 
             flat['address'] = None
 
         try:
-            desc_elem = await page.query_selector('[data-marker="item-view/item-description"]')
-            flat['description'] = (await desc_elem.inner_text()).strip() if desc_elem else None
+            desc_selectors = [
+                '[data-marker="item-view/item-description"]',
+                '[itemprop="description"]',
+                '.item-description-text'
+            ]
+            for selector in desc_selectors:
+                desc_elem = await page.query_selector(selector)
+                if desc_elem:
+                    flat['description'] = (await desc_elem.inner_text()).strip()
+                    break
+            if 'description' not in flat:
+                flat['description'] = None
         except: 
             flat['description'] = None
 
         params = {}
         try:
-            params_sections = await page.query_selector_all('[data-marker="item-view/item-params"]')
+            params_sections = await page.query_selector_all('[data-marker="item-view/item-params"], .item-params')
             for section in params_sections:
                 items = await section.query_selector_all('li')
                 for item in items:
@@ -224,14 +277,26 @@ async def parse_avito(url: str):
             pass
         flat['params'] = params
 
-        flat['photos'] = []  # Отключаем для экономии трафика
-        flat['proxy'] = 'Bright Data (Kazakhstan 🇰🇿)'
+        try:
+            photo_urls = []
+            imgs = await page.query_selector_all('img[src*="avito.st"], img[src*="avito-st"]')
+            for img in imgs:
+                src = await img.get_attribute('src')
+                if src and '.jpg' in src:
+                    clean_url = src.split('?')[0]
+                    if len(clean_url) > 50:
+                        photo_urls.append(clean_url)
+            flat['photos'] = list(set(photo_urls))
+        except:
+            flat['photos'] = []
+
+        flat['parsed_mode'] = 'mobile'  # ✅ Флаг
 
         await browser.close()
         return flat
 
 async def parse_cian(url: str):
-    # Циан БЕЗ прокси (работает напрямую)
+    """Парсинг Cian (без изменений)"""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
         context = await browser.new_context(
@@ -239,10 +304,6 @@ async def parse_cian(url: str):
             viewport={"width": 1920, "height": 1080},
             locale="ru-RU"
         )
-        
-        # Блокировка картинок
-        await context.route('**/*.{png,jpg,jpeg,gif,webp,svg}', lambda route: route.abort())
-        
         page = await context.new_page()
         page.set_default_timeout(60000)
         
@@ -321,8 +382,20 @@ async def parse_cian(url: str):
         except: 
             flat['description'] = None
 
-        flat['photos'] = []  # Отключаем для экономии
-        flat['proxy'] = 'Direct (no proxy)'
+        try:
+            photo_urls = []
+            thumb_imgs = await page.query_selector_all('[data-name="PaginationThumbsComponent"] img')
+            for img in thumb_imgs:
+                src = await img.get_attribute('src')
+                if src and 'cdn-cian.ru/images' in src:
+                    full_src = src.replace('-2.jpg', '-1.jpg')
+                    if full_src not in photo_urls:
+                        photo_urls.append(full_src)
+            flat['photos'] = photo_urls
+        except:
+            flat['photos'] = []
+
+        flat['parsed_mode'] = 'desktop'
 
         await browser.close()
         return flat
@@ -330,13 +403,8 @@ async def parse_cian(url: str):
 @app.get("/")
 async def root():
     return {
-        "service": "Парсер Avito & Cian (Playwright + Bright Data) 🚀",
-        "proxy": {
-            "provider": "Bright Data",
-            "country": "Kazakhstan 🇰🇿",
-            "server": PROXY_CONFIG['server'],
-            "status": "Active" if PROXY_CONFIG['password'] else "Not configured"
-        },
+        "service": "Парсер Avito (Mobile 📱) & Cian 🚀",
+        "avito_mode": "Mobile (iPhone 14 Pro)",
         "cookies_loaded": os.path.exists(COOKIES_FILE),
         "endpoints": {
             "POST /parse": "Парсить {\"url\": \"https://...\"}"
