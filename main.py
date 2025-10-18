@@ -7,21 +7,50 @@ from playwright.async_api import async_playwright
 import random
 import os
 
-app = FastAPI(title="Парсер квартир Avito & Cian с Cookies")
+app = FastAPI(title="Парсер квартир Avito & Cian")
 
 class ParseRequest(BaseModel):
     url: HttpUrl
 
-# Файл с cookies
 COOKIES_FILE = "avito_session.json"
 
+async def human_like_mouse_move(page, from_x, from_y, to_x, to_y):
+    steps = random.randint(15, 30)
+    for i in range(steps):
+        progress = i / steps
+        curve = random.uniform(-10, 10)
+        x = from_x + (to_x - from_x) * progress + curve
+        y = from_y + (to_y - from_y) * progress + curve
+        await page.mouse.move(x, y)
+        await asyncio.sleep(random.uniform(0.01, 0.03))
+
+async def emulate_human_behavior(page):
+    start_x, start_y = random.randint(100, 300), random.randint(100, 300)
+    end_x, end_y = random.randint(400, 800), random.randint(200, 600)
+    await human_like_mouse_move(page, start_x, start_y, end_x, end_y)
+    
+    await asyncio.sleep(random.uniform(0.5, 1.5))
+    
+    for _ in range(random.randint(2, 4)):
+        scroll_amount = random.randint(150, 400)
+        if random.random() < 0.3:
+            scroll_amount = -scroll_amount
+        await page.evaluate(f'window.scrollBy(0, {scroll_amount})')
+        await asyncio.sleep(random.uniform(0.8, 2.0))
+    
+    for _ in range(random.randint(2, 5)):
+        jitter_x = end_x + random.randint(-5, 5)
+        jitter_y = end_y + random.randint(-5, 5)
+        await page.mouse.move(jitter_x, jitter_y)
+        await asyncio.sleep(random.uniform(0.1, 0.3))
+
 async def close_modals(page):
-    """Закрывает модальные окна"""
     try:
         selectors = [
             "button:has-text('Не интересно')",
             "[data-marker*='modal/close']",
             ".modal__close",
+            "button[aria-label='Закрыть']",
         ]
         for selector in selectors:
             button = await page.query_selector(selector)
@@ -34,7 +63,6 @@ async def close_modals(page):
         return False
 
 async def click_continue_if_exists(page):
-    """Клик по 'Продолжить'"""
     try:
         selectors = [
             "button:has-text('Продолжить')",
@@ -43,15 +71,20 @@ async def click_continue_if_exists(page):
         for selector in selectors:
             button = await page.query_selector(selector)
             if button:
-                await button.click()
-                await asyncio.sleep(5)
-                return True
+                box = await button.bounding_box()
+                if box:
+                    click_x = box['x'] + box['width'] * random.uniform(0.3, 0.7)
+                    click_y = box['y'] + box['height'] * random.uniform(0.3, 0.7)
+                    await page.mouse.move(click_x, click_y)
+                    await asyncio.sleep(random.uniform(0.3, 0.8))
+                    await page.mouse.click(click_x, click_y)
+                    await asyncio.sleep(5)
+                    return True
         return False
     except:
         return False
 
 async def parse_avito(url: str):
-    """Парсер Avito с cookies"""
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -75,23 +108,50 @@ async def parse_avito(url: str):
             "permissions": ["geolocation"],
         }
         
-        # ЗАГРУЗКА COOKIES
         if os.path.exists(COOKIES_FILE):
             print(f"[INFO] 🍪 Загружаю cookies из {COOKIES_FILE}")
             context_options["storage_state"] = COOKIES_FILE
-        else:
-            print(f"[WARNING] ⚠️ Cookies не найдены")
         
         context = await browser.new_context(**context_options)
         
-        # Маскировка
         await context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
             Object.defineProperty(navigator, 'plugins', {
-                get: () => [{name: 'Chrome PDF Plugin'}, {name: 'Chrome PDF Viewer'}]
+                get: () => [
+                    {name: 'Chrome PDF Plugin', description: 'Portable Document Format', filename: 'internal-pdf-viewer'},
+                    {name: 'Chrome PDF Viewer', description: '', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai'},
+                    {name: 'Native Client', description: '', filename: 'internal-nacl-plugin'}
+                ],
             });
             Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru'] });
-            window.chrome = { runtime: {} };
+            Object.defineProperty(navigator, 'language', { get: () => 'ru-RU' });
+            Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+            window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {} };
+            
+            const getParameter = WebGLRenderingContext.prototype.getParameter;
+            WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                if (parameter === 37445) return 'Intel Inc.';
+                if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+                return getParameter.call(this, parameter);
+            };
+            
+            const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+            HTMLCanvasElement.prototype.toDataURL = function(type) {
+                const context = this.getContext('2d');
+                if (context) {
+                    const imageData = context.getImageData(0, 0, this.width, this.height);
+                    for (let i = 0; i < imageData.data.length; i += 4) {
+                        imageData.data[i] += Math.floor(Math.random() * 3) - 1;
+                        imageData.data[i+1] += Math.floor(Math.random() * 3) - 1;
+                        imageData.data[i+2] += Math.floor(Math.random() * 3) - 1;
+                    }
+                    context.putImageData(imageData, 0, 0);
+                }
+                return originalToDataURL.apply(this, arguments);
+            };
+            
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
         """)
         
         await context.set_extra_http_headers({
@@ -101,9 +161,8 @@ async def parse_avito(url: str):
         
         page = await context.new_page()
         page.set_default_timeout(90000)
-        page.set_default_navigation_timeout(90000)
         
-        # 1. ГЛАВНАЯ СТРАНИЦА
+        # Главная страница
         try:
             print("[INFO] Загружаю главную Avito...")
             await page.goto("https://www.avito.ru/", wait_until="domcontentloaded", timeout=90000)
@@ -111,28 +170,15 @@ async def parse_avito(url: str):
             
             await close_modals(page)
             await click_continue_if_exists(page)
+            await emulate_human_behavior(page)
             
-            # Эмуляция
-            await page.mouse.move(random.randint(100, 800), random.randint(100, 600))
-            await page.wait_for_timeout(random.randint(500, 1500))
-            await page.evaluate('window.scrollTo(0, 300)')
-            
-
-# Плюс больше активности на главной
-            for _ in range(5):
-                await page.evaluate(f'window.scrollBy(0, {random.randint(250, 600)})')
-                await page.wait_for_timeout(random.randint(2000, 4000))
-                await page.mouse.move(random.randint(300, 1600), random.randint(300, 900))
-                await page.wait_for_timeout(random.randint(500, 1500))
-                        
             print("[SUCCESS] Главная загружена")
         except Exception as e:
             print(f"[WARNING] Ошибка главной: {e}")
         
-        print("[INFO] Ожидание перед переходом на объявление (10-15 сек)")
         await page.wait_for_timeout(random.randint(10000, 15000))
-
-        # 2. ОБЪЯВЛЕНИЕ
+        
+        # Объявление
         try:
             print(f"[INFO] Переход на объявление...")
             await page.goto(url, wait_until="domcontentloaded", timeout=90000)
@@ -140,27 +186,18 @@ async def parse_avito(url: str):
             
             await close_modals(page)
             await click_continue_if_exists(page)
-            
-            # Эмуляция чтения
-            for _ in range(random.randint(2, 4)):
-                scroll_amount = random.randint(200, 500)
-                await page.evaluate(f'window.scrollBy(0, {scroll_amount})')
-                await page.wait_for_timeout(random.randint(800, 1500))
-                await page.mouse.move(random.randint(200, 1000), random.randint(200, 800))
-                await page.wait_for_timeout(random.randint(500, 1000))
+            await emulate_human_behavior(page)
             
             print("[SUCCESS] Объявление загружено")
         except Exception as e:
             print(f"[ERROR] Ошибка объявления: {e}")
         
-        # ОБНОВЛЕНИЕ COOKIES
         try:
             await context.storage_state(path=COOKIES_FILE)
             print(f"[INFO] 🍪 Cookies обновлены")
-        except Exception as e:
-            print(f"[WARNING] Ошибка сохранения cookies: {e}")
+        except:
+            pass
         
-        # Проверка блокировки
         html = await page.content()
         title = await page.title()
         
@@ -175,7 +212,6 @@ async def parse_avito(url: str):
             await browser.close()
             return {'error': 'blocked', 'message': 'Avito заблокировал'}
         
-        # Парсинг
         flat = {}
         
         try:
@@ -235,9 +271,7 @@ async def parse_avito(url: str):
         await browser.close()
         return flat
 
-
 async def parse_cian(url: str):
-    """Парсер Cian"""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
         context = await browser.new_context(
@@ -297,18 +331,6 @@ async def parse_cian(url: str):
                 except: continue
         except: pass
         
-        try:
-            fact_items = await page.query_selector_all('[data-name="OfferFactItem"]')
-            for item in fact_items:
-                try:
-                    spans = await item.query_selector_all('span')
-                    if len(spans) >= 2:
-                        key = (await spans[0].inner_text()).strip()
-                        value = (await spans[1].inner_text()).strip()
-                        params[key] = value
-                except: continue
-        except: pass
-        
         flat['params'] = params
 
         try:
@@ -348,7 +370,7 @@ async def parse_cian(url: str):
 @app.get("/")
 async def root():
     return {
-        "service": "Парсер Avito & Cian с Cookies 🍪",
+        "service": "Парсер Avito & Cian 🍪",
         "cookies_loaded": os.path.exists(COOKIES_FILE),
         "endpoints": {
             "POST /parse": "Парсить объявление {\"url\": \"https://...\"}"
@@ -357,7 +379,6 @@ async def root():
 
 @app.post("/parse")
 async def parse_flat(request: ParseRequest):
-    """Парсит объявление с Avito или Cian"""
     url_str = str(request.url)
     
     try:
