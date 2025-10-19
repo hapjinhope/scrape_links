@@ -13,7 +13,7 @@ class ParseRequest(BaseModel):
     url: HttpUrl
 
 COOKIES_FILE = "avito_session.json"
-MOBILE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+DESKTOP_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 async def human_like_mouse_move(page, from_x, from_y, to_x, to_y):
     steps = random.randint(10, 20)
@@ -26,8 +26,8 @@ async def human_like_mouse_move(page, from_x, from_y, to_x, to_y):
         await asyncio.sleep(random.uniform(0.02, 0.05))
 
 async def emulate_human_behavior(page):
-    start_x, start_y = random.randint(50, 150), random.randint(100, 300)
-    end_x, end_y = random.randint(200, 350), random.randint(400, 700)
+    start_x, start_y = random.randint(100, 400), random.randint(200, 500)
+    end_x, end_y = random.randint(600, 1200), random.randint(400, 800)
     await human_like_mouse_move(page, start_x, start_y, end_x, end_y)
     await asyncio.sleep(random.uniform(0.5, 1.0))
     for _ in range(random.randint(3, 5)):
@@ -83,7 +83,7 @@ async def click_continue_if_exists(page):
         return False
 
 async def parse_avito(url: str):
-    """Парсинг Avito: Mobile режим + Cookies + Переход через главную"""
+    """Парсинг Avito: Desktop режим + Cookies + Переход через главную"""
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -92,23 +92,23 @@ async def parse_avito(url: str):
                 '--disable-setuid-sandbox',
                 '--disable-blink-features=AutomationControlled',
                 '--disable-dev-shm-usage',
-                '--window-size=390,844',
+                '--window-size=1920,1080',
                 '--lang=ru-RU',
-                f'--user-agent={MOBILE_UA}',
+                f'--user-agent={DESKTOP_UA}',
             ],
             timeout=90000
         )
         
         context_options = {
-            "user_agent": MOBILE_UA,
-            "viewport": {"width": 390, "height": 844},
-            "device_scale_factor": 3,
-            "is_mobile": True,
-            "has_touch": True,
+            "user_agent": DESKTOP_UA,
+            "viewport": {"width": 1920, "height": 1080},
+            "screen": {"width": 1920, "height": 1080},
             "locale": "ru-RU",
             "timezone_id": "Europe/Moscow",
             "geolocation": {"longitude": 37.6173, "latitude": 55.7558},
-            "permissions": ["geolocation"],
+            "permissions": ["geolocation", "notifications"],
+            "color_scheme": "light",
+            "device_scale_factor": 1,
         }
         
         if os.path.exists(COOKIES_FILE):
@@ -121,26 +121,78 @@ async def parse_avito(url: str):
         
         await context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
-            Object.defineProperty(navigator, 'platform', { get: () => 'iPhone' });
-            Object.defineProperty(navigator, 'vendor', { get: () => 'Apple Computer, Inc.' });
-            Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 5 });
-            Object.defineProperty(navigator, 'plugins', { get: () => [] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'en-US'] });
-            window.ontouchstart = null;
+            Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' });
+            Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.' });
+            Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
+            Object.defineProperty(navigator, 'plugins', { get: () => [
+                {name: 'Chrome PDF Plugin', description: 'Portable Document Format', filename: 'internal-pdf-viewer'},
+                {name: 'Chrome PDF Viewer', description: '', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai'},
+                {name: 'Native Client', description: '', filename: 'internal-nacl-plugin'}
+            ]});
+            Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'en-US', 'en'] });
             const getParameter = WebGLRenderingContext.prototype.getParameter;
             WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                if (parameter === 37445) return 'Apple Inc.';
-                if (parameter === 37446) return 'Apple GPU';
+                if (parameter === 37445) return 'Intel Inc.';
+                if (parameter === 37446) return 'Intel Iris OpenGL Engine';
                 return getParameter.call(this, parameter);
             };
-            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 });
-            Object.defineProperty(navigator, 'deviceMemory', { get: () => 6 });
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+            Object.defineProperty(navigator, 'connection', { 
+                get: () => ({
+                    effectiveType: '4g',
+                    rtt: 100,
+                    downlink: 10,
+                    saveData: false
+                })
+            });
+            Object.defineProperty(screen, 'width', { get: () => 1920 });
+            Object.defineProperty(screen, 'height', { get: () => 1080 });
+            Object.defineProperty(screen, 'availWidth', { get: () => 1920 });
+            Object.defineProperty(screen, 'availHeight', { get: () => 1055 });
+            Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
+            Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
+            
+            // Canvas fingerprint
+            const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+            HTMLCanvasElement.prototype.toDataURL = function() {
+                const context = this.getContext('2d');
+                if (context) {
+                    const imageData = context.getImageData(0, 0, this.width, this.height);
+                    for (let i = 0; i < imageData.data.length; i += 4) {
+                        imageData.data[i] = imageData.data[i] ^ 1;
+                    }
+                    context.putImageData(imageData, 0, 0);
+                }
+                return originalToDataURL.apply(this, arguments);
+            };
+            
+            // Battery API
+            Object.defineProperty(navigator, 'getBattery', {
+                get: () => () => Promise.resolve({
+                    charging: true,
+                    chargingTime: 0,
+                    dischargingTime: Infinity,
+                    level: 1,
+                    addEventListener: () => {},
+                    removeEventListener: () => {}
+                })
+            });
         """)
         
         await context.set_extra_http_headers({
-            "Accept-Language": "ru-RU,ru;q=0.9",
-            "sec-ch-ua-mobile": "?1",
-            "sec-ch-ua-platform": '"iOS"',
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Cache-Control": "max-age=0",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
+            "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"macOS"',
             "Referer": "https://www.google.com/",
         })
         
@@ -149,8 +201,8 @@ async def parse_avito(url: str):
         
         # ШАГ 1: ГЛАВНАЯ
         try:
-            print(f"[INFO] 🏠 Шаг 1/2: Загружаю главную (m.avito.ru)")
-            await page.goto("https://m.avito.ru/", wait_until="domcontentloaded", timeout=90000)
+            print(f"[INFO] 🏠 Шаг 1/2: Загружаю главную (www.avito.ru)")
+            await page.goto("https://www.avito.ru/", wait_until="domcontentloaded", timeout=90000)
             await page.wait_for_timeout(random.randint(2000, 4000))
             await close_modals(page)
             await click_continue_if_exists(page)
@@ -162,10 +214,9 @@ async def parse_avito(url: str):
         
         # ШАГ 2: ОБЪЯВЛЕНИЕ
         try:
-            print(f"[INFO] 📱 Шаг 2/2: Переход на объявление")
-            mobile_url = url.replace("www.avito.ru", "m.avito.ru")
-            print(f"[DEBUG] Mobile URL: {mobile_url}")
-            await page.goto(mobile_url, wait_until="domcontentloaded", timeout=90000)
+            print(f"[INFO] 🖥️ Шаг 2/2: Переход на объявление")
+            print(f"[DEBUG] URL: {url}")
+            await page.goto(url, wait_until="domcontentloaded", timeout=90000)
             await page.wait_for_timeout(random.randint(3000, 5000))
             await close_modals(page)
             await asyncio.sleep(1)
@@ -292,7 +343,7 @@ async def parse_avito(url: str):
         except:
             flat['photos'] = []
 
-        flat['parsed_mode'] = 'mobile'
+        flat['parsed_mode'] = 'desktop'
         flat['cookies_used'] = os.path.exists(COOKIES_FILE)
 
         await browser.close()
@@ -303,7 +354,7 @@ async def parse_cian(url: str):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            user_agent=DESKTOP_UA,
             viewport={"width": 1920, "height": 1080},
             locale="ru-RU"
         )
@@ -406,8 +457,8 @@ async def parse_cian(url: str):
 @app.get("/")
 async def root():
     return {
-        "service": "Парсер Avito (Mobile 📱) & Cian 🚀",
-        "avito_mode": "Mobile (iPhone 14 Pro) + Cookies + Homepage visit",
+        "service": "Парсер Avito (Desktop 🖥️) & Cian 🚀",
+        "avito_mode": "Desktop (MacBook Pro) + Cookies + Homepage visit",
         "cookies_loaded": os.path.exists(COOKIES_FILE),
         "endpoints": {
             "POST /parse": "Парсить {\"url\": \"https://...\"}"
