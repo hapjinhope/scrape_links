@@ -6,6 +6,7 @@ import re
 from playwright.async_api import async_playwright
 import random
 import os
+import json
 
 app = FastAPI(title="Парсер квартир Avito & Cian")
 
@@ -46,6 +47,8 @@ async def close_modals(page):
     try:
         selectors = [
             "button:has-text('Не интересно')",
+            "button.RxKAg[aria-label='закрыть']",
+            "button[data-marker='NOT_INTERESTING_MARKER']",
             "[data-marker*='modal/close']",
             ".modal__close",
             "button[aria-label='Закрыть']",
@@ -83,7 +86,7 @@ async def click_continue_if_exists(page):
         return False
 
 async def parse_avito(url: str):
-    """Парсинг Avito: Desktop режим + Cookies + Переход через главную"""
+    """Парсинг Avito"""
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -112,245 +115,361 @@ async def parse_avito(url: str):
         }
         
         if os.path.exists(COOKIES_FILE):
-            print(f"[INFO] 🍪 Загружаю cookies из {COOKIES_FILE}")
+            print(f"[INFO] 🍪 Загружаю cookies")
             context_options["storage_state"] = COOKIES_FILE
-        else:
-            print(f"[WARNING] ⚠️ Cookies не найдены")
         
         context = await browser.new_context(**context_options)
         
         await context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
             Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' });
-            Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.' });
-            Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
-            Object.defineProperty(navigator, 'plugins', { get: () => [
-                {name: 'Chrome PDF Plugin', description: 'Portable Document Format', filename: 'internal-pdf-viewer'},
-                {name: 'Chrome PDF Viewer', description: '', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai'},
-                {name: 'Native Client', description: '', filename: 'internal-nacl-plugin'}
-            ]});
-            Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'en-US', 'en'] });
-            const getParameter = WebGLRenderingContext.prototype.getParameter;
-            WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                if (parameter === 37445) return 'Intel Inc.';
-                if (parameter === 37446) return 'Intel Iris OpenGL Engine';
-                return getParameter.call(this, parameter);
-            };
-            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-            Object.defineProperty(navigator, 'connection', { 
-                get: () => ({
-                    effectiveType: '4g',
-                    rtt: 100,
-                    downlink: 10,
-                    saveData: false
-                })
-            });
-            Object.defineProperty(screen, 'width', { get: () => 1920 });
-            Object.defineProperty(screen, 'height', { get: () => 1080 });
-            Object.defineProperty(screen, 'availWidth', { get: () => 1920 });
-            Object.defineProperty(screen, 'availHeight', { get: () => 1055 });
-            Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
-            Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
-            
-            // Canvas fingerprint
-            const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
-            HTMLCanvasElement.prototype.toDataURL = function() {
-                const context = this.getContext('2d');
-                if (context) {
-                    const imageData = context.getImageData(0, 0, this.width, this.height);
-                    for (let i = 0; i < imageData.data.length; i += 4) {
-                        imageData.data[i] = imageData.data[i] ^ 1;
-                    }
-                    context.putImageData(imageData, 0, 0);
-                }
-                return originalToDataURL.apply(this, arguments);
-            };
-            
-            // Battery API
-            Object.defineProperty(navigator, 'getBattery', {
-                get: () => () => Promise.resolve({
-                    charging: true,
-                    chargingTime: 0,
-                    dischargingTime: Infinity,
-                    level: 1,
-                    addEventListener: () => {},
-                    removeEventListener: () => {}
-                })
-            });
         """)
-        
-        await context.set_extra_http_headers({
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Cache-Control": "max-age=0",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "Upgrade-Insecure-Requests": "1",
-            "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"macOS"',
-            "Referer": "https://www.google.com/",
-        })
         
         page = await context.new_page()
         page.set_default_timeout(90000)
         
-        # ШАГ 1: ГЛАВНАЯ
+        # Главная
         try:
-            print(f"[INFO] 🏠 Шаг 1/2: Загружаю главную (www.avito.ru)")
-            await page.goto("https://www.avito.ru/", wait_until="domcontentloaded", timeout=90000)
-            await page.wait_for_timeout(random.randint(2000, 4000))
+            await page.goto("https://www.avito.ru/", wait_until="domcontentloaded")
+            await page.wait_for_timeout(2000)
             await close_modals(page)
-            await click_continue_if_exists(page)
             await emulate_human_behavior(page)
-            print("[SUCCESS] ✅ Главная загружена")
-            await page.wait_for_timeout(random.randint(1000, 2000))
-        except Exception as e:
-            print(f"[WARNING] ⚠️ Ошибка главной: {e}")
+        except:
+            pass
         
-        # ШАГ 2: ОБЪЯВЛЕНИЕ
-        try:
-            print(f"[INFO] 🖥️ Шаг 2/2: Переход на объявление")
-            print(f"[DEBUG] URL: {url}")
-            await page.goto(url, wait_until="domcontentloaded", timeout=90000)
-            await page.wait_for_timeout(random.randint(3000, 5000))
-            await close_modals(page)
-            await asyncio.sleep(1)
-            await click_continue_if_exists(page)
-            await emulate_human_behavior(page)
-            print("[SUCCESS] ✅ Объявление загружено")
-        except Exception as e:
-            print(f"[ERROR] ❌ Ошибка: {e}")
+        # Объявление
+        await page.goto(url, wait_until="domcontentloaded")
+        await page.wait_for_timeout(3000)
+        await close_modals(page)
+        await emulate_human_behavior(page)
         
         try:
             await context.storage_state(path=COOKIES_FILE)
-            print("[INFO] 🍪 Cookies обновлены")
         except:
             pass
         
-        html = await page.content()
-        title = await page.title()
-        
-        is_blocked = (
-            'доступ ограничен' in html.lower() or
-            'access denied' in html.lower() or
-            'captcha' in title.lower()
-        )
-        
-        if is_blocked:
-            print("[WARNING] ⚠️ Блокировка")
-            await browser.close()
-            return {'error': 'blocked', 'message': 'Avito заблокировал'}
-        
-        flat = {}
-        
+        # ПРОВЕРКА АКТУАЛЬНОСТИ
         try:
-            title_selectors = [
-                '[data-marker="item-view/title-info"]',
-                'h1[itemprop="name"]',
-                'h1',
-                '.title-info-title'
-            ]
-            for selector in title_selectors:
-                title_elem = await page.query_selector(selector)
-                if title_elem:
-                    flat['title'] = (await title_elem.inner_text()).strip()
-                    break
-            if 'title' not in flat:
-                flat['title'] = None
-        except: 
-            flat['title'] = None
-
-        try:
-            price_selectors = [
-                '[data-marker="item-view/item-price"]',
-                '[itemprop="price"]',
-                '.js-item-price'
-            ]
-            for selector in price_selectors:
-                price_elem = await page.query_selector(selector)
-                if price_elem:
-                    flat['price'] = (await price_elem.inner_text()).strip()
-                    break
-            if 'price' not in flat:
-                flat['price'] = None
-        except: 
-            flat['price'] = None
-
-        try:
-            addr_selectors = [
-                '[data-marker="item-view/location-address"]',
-                '[data-marker="item-address"]',
-                '.item-address'
-            ]
-            for selector in addr_selectors:
-                addr_elem = await page.query_selector(selector)
-                if addr_elem:
-                    flat['address'] = (await addr_elem.inner_text()).strip()
-                    break
-            if 'address' not in flat:
-                flat['address'] = None
-        except: 
-            flat['address'] = None
-
-        try:
-            desc_selectors = [
-                '[data-marker="item-view/item-description"]',
-                '[itemprop="description"]',
-                '.item-description-text'
-            ]
-            for selector in desc_selectors:
-                desc_elem = await page.query_selector(selector)
-                if desc_elem:
-                    flat['description'] = (await desc_elem.inner_text()).strip()
-                    break
-            if 'description' not in flat:
-                flat['description'] = None
-        except: 
-            flat['description'] = None
-
-        params = {}
-        try:
-            params_sections = await page.query_selector_all('[data-marker="item-view/item-params"], .item-params')
-            for section in params_sections:
-                items = await section.query_selector_all('li')
-                for item in items:
-                    try:
-                        text = (await item.inner_text()).strip()
-                        if ':' in text:
-                            key, value = text.split(':', 1)
-                            params[key.strip()] = value.strip()
-                    except: 
-                        continue
-        except: 
+            unpublished = await page.query_selector('h1.EEPdn:has-text("Объявление не")')
+            if unpublished:
+                await browser.close()
+                return {'status': 'unpublished', 'message': 'Объявление снято'}
+        except:
             pass
-        flat['params'] = params
-
+        
+        # ПРОВЕРКА ТИПА СВЯЗИ
+        messages_only = False
         try:
-            photo_urls = []
-            imgs = await page.query_selector_all('img[src*="avito.st"], img[src*="avito-st"]')
-            for img in imgs:
-                src = await img.get_attribute('src')
-                if src and '.jpg' in src:
-                    clean_url = src.split('?')[0]
-                    if len(clean_url) > 50:
-                        photo_urls.append(clean_url)
-            flat['photos'] = list(set(photo_urls))
+            no_calls = await page.query_selector('button:has-text("Без звонков")')
+            if no_calls:
+                messages_only = True
+        except:
+            pass
+        
+        # ДАННЫЕ
+        flat = {'status': 'active', 'messages_only': messages_only}
+        
+        try:
+            title_el = await page.query_selector('h1[itemprop="name"]')
+            flat['summary'] = (await title_el.inner_text()).strip() if title_el else None
+        except:
+            flat['summary'] = None
+        
+        try:
+            price_el = await page.query_selector('span[content][itemprop="price"]')
+            if price_el:
+                price_value = await price_el.get_attribute('content')
+                currency_el = await page.query_selector('span[itemprop="priceCurrency"]')
+                currency = (await currency_el.inner_text()).strip() if currency_el else ''
+                flat['price'] = f"{price_value} {currency}"
+            else:
+                price_el2 = await page.query_selector('.hQ3Iv[data-marker="item-view/item-price"]')
+                flat['price'] = (await price_el2.inner_text()).strip() if price_el2 else None
+        except:
+            flat['price'] = None
+        
+        try:
+            addr_el = await page.query_selector('span.xLPJ6')
+            flat['address'] = (await addr_el.inner_text()).strip() if addr_el else None
+        except:
+            flat['address'] = None
+        
+        try:
+            metro_stations = []
+            metro_items = await page.query_selector_all('span.tAdYM')
+            for metro in metro_items:
+                try:
+                    spans = await metro.query_selector_all('span')
+                    if len(spans) >= 2:
+                        station_name = (await spans[1].inner_text()).strip()
+                        time_span = await metro.query_selector('span.LHPFZ')
+                        if time_span:
+                            time_text = (await time_span.inner_text()).strip()
+                            metro_info = f"{station_name} ({time_text})"
+                        else:
+                            metro_info = station_name
+                        if 'мин' not in station_name:
+                            metro_stations.append(metro_info)
+                except:
+                    pass
+            flat['metro'] = metro_stations
+        except:
+            flat['metro'] = []
+        
+        try:
+            desc_el = await page.query_selector('div[itemprop="description"][data-marker="item-view/item-description"]')
+            flat['description'] = (await desc_el.inner_text()).strip() if desc_el else None
+        except:
+            flat['description'] = None
+        
+        try:
+            seller_el = await page.query_selector('[data-marker="seller-info/name"] span.TTiHl')
+            flat['seller_name'] = (await seller_el.inner_text()).strip() if seller_el else None
+        except:
+            flat['seller_name'] = None
+        
+        # Параметры квартиры
+        try:
+            params_list = await page.query_selector_all('ul.HRzg1 li.cHzV4')
+            rooms_count = total_area = kitchen_area = floor = floors_total = room_type = bathroom = repair = appliances = deposit = commission = kids = pets = year_built = elevator_passenger = elevator_cargo = parking = None
+            
+            for param in params_list:
+                try:
+                    text = (await param.inner_text()).strip()
+                    if ':' in text:
+                        parts = text.split(':', 1)
+                        key = parts[0].strip()
+                        value = parts[1].strip()
+                        
+                        if 'Количество комнат' in key:
+                            rooms_count = value
+                        elif 'Общая площадь' in key:
+                            total_area = value
+                        elif 'Площадь кухни' in key:
+                            kitchen_area = value
+                        elif key == "Этаж" and 'из' in value:
+                            try:
+                                floor_parts = value.split('из')
+                                floor = floor_parts[0].strip()
+                                floors_total = floor_parts[1].strip()
+                            except:
+                                floor = value
+                        elif 'Тип комнат' in key:
+                            room_type = value
+                        elif 'Санузел' in key:
+                            bathroom = value
+                        elif 'Ремонт' in key:
+                            repair = value
+                        elif 'Техника' in key:
+                            appliances = value
+                        elif 'Залог' in key:
+                            deposit = value
+                        elif 'Комиссия' in key:
+                            commission = value
+                        elif 'Можно с детьми' in key:
+                            kids = value
+                        elif 'Можно с животными' in key:
+                            pets = value
+                        elif 'Год постройки' in key:
+                            year_built = value
+                        elif 'Пассажирский лифт' in key:
+                            elevator_passenger = value
+                        elif 'Грузовой лифт' in key:
+                            elevator_cargo = value
+                        elif 'Парковка' in key:
+                            parking = value
+                except:
+                    pass
+            
+            flat.update({
+                'rooms_count': rooms_count,
+                'total_area': total_area,
+                'kitchen_area': kitchen_area,
+                'floor': floor,
+                'floors_total': floors_total,
+                'room_type': room_type,
+                'bathroom': bathroom,
+                'repair': repair,
+                'appliances': appliances,
+                'deposit': deposit,
+                'commission': commission,
+                'kids': kids,
+                'pets': pets,
+                'year_built': year_built,
+                'elevator_passenger': elevator_passenger,
+                'elevator_cargo': elevator_cargo,
+                'parking': parking
+            })
+        except:
+            pass
+        
+        # Параметры дома
+        try:
+            all_params_blocks = await page.query_selector_all('ul.HRzg1')
+            house_deposit = house_commission = utilities_counters = utilities_other = None
+            
+            if len(all_params_blocks) >= 2:
+                house_list = await all_params_blocks[1].query_selector_all('li.cHzV4')
+                for param in house_list:
+                    try:
+                        text = (await param.inner_text()).strip()
+                        if ':' in text:
+                            parts = text.split(':', 1)
+                            key = parts[0].strip()
+                            value = parts[1].strip()
+                            
+                            if 'Залог' in key:
+                                house_deposit = value
+                            elif 'Комиссия' in key:
+                                house_commission = value
+                            elif 'По счетчикам' in key:
+                                utilities_counters = value
+                            elif 'Другие ЖКУ' in key:
+                                utilities_other = value
+                    except:
+                        pass
+            
+            flat.update({
+                'house_deposit': house_deposit,
+                'house_commission': house_commission,
+                'utilities_counters': utilities_counters,
+                'utilities_other': utilities_other
+            })
+        except:
+            pass
+        
+        # Правила
+        try:
+            all_params_blocks = await page.query_selector_all('ul.HRzg1')
+            rules_kids = rules_pets = None
+            
+            if len(all_params_blocks) >= 3:
+                rules_list = await all_params_blocks[2].query_selector_all('li.cHzV4')
+                for rule in rules_list:
+                    try:
+                        text = (await rule.inner_text()).strip()
+                        if ':' in text:
+                            parts = text.split(':', 1)
+                            key = parts[0].strip()
+                            value = parts[1].strip()
+                            
+                            if 'Можно с детьми' in key:
+                                rules_kids = value
+                            elif 'Можно с животными' in key:
+                                rules_pets = value
+                    except:
+                        pass
+            
+            flat.update({'rules_kids': rules_kids, 'rules_pets': rules_pets})
+        except:
+            pass
+        
+        # ФОТО
+        try:
+            photos = set()
+            await page.evaluate("window.scrollTo(0, 200)")
+            await asyncio.sleep(1)
+            
+            carousel = await page.query_selector('ul.Jue7e')
+            if carousel:
+                total_items = len(await page.query_selector_all('ul.Jue7e li.Kg235'))
+                max_clicks = total_items if total_items > 0 else 30
+                click_count = 0
+                
+                while click_count < max_clicks:
+                    gallery_photos = await page.query_selector_all('#gallery-slider img[src*="avito.st"]')
+                    
+                    for photo in gallery_photos:
+                        try:
+                            src = await photo.get_attribute('src')
+                            if src and 'avito.st' in src and 'http' in src:
+                                clean_url = src.split('?')[0]
+                                photos.add(clean_url)
+                        except:
+                            pass
+                    
+                    if len(photos) >= total_items:
+                        break
+                    
+                    try:
+                        next_button = await page.query_selector('button.LJZ92.bTaFV')
+                        if next_button and await next_button.is_visible():
+                            await next_button.click()
+                            click_count += 1
+                            await asyncio.sleep(0.8)
+                        else:
+                            break
+                    except:
+                        break
+            
+            flat['photos'] = list(photos)
         except:
             flat['photos'] = []
-
-        flat['parsed_mode'] = 'desktop'
-        flat['cookies_used'] = os.path.exists(COOKIES_FILE)
-
+        
+        # ТЕЛЕФОН
+        if messages_only:
+            flat['phone'] = 'только сообщения'
+        else:
+            try:
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+                await asyncio.sleep(1)
+                
+                phone_clicked = False
+                for selector in ['button[data-marker="item-phone-button/card"]', 'button:has-text("Показать телефон")', 'button.QaQVm']:
+                    try:
+                        phone_button = await page.query_selector(selector)
+                        if phone_button and await phone_button.is_visible():
+                            await phone_button.scroll_into_view_if_needed()
+                            await asyncio.sleep(0.5)
+                            await phone_button.click()
+                            phone_clicked = True
+                            await asyncio.sleep(3)
+                            break
+                    except:
+                        continue
+                
+                if phone_clicked:
+                    phone_found = False
+                    
+                    try:
+                        phone_links = await page.query_selector_all('a[href^="tel:"]')
+                        for phone_link in phone_links:
+                            try:
+                                href = await phone_link.get_attribute('href')
+                                if href:
+                                    phone_number = href.replace('tel:', '').replace('+', '').strip()
+                                    if len(phone_number) >= 10:
+                                        flat['phone'] = phone_number
+                                        phone_found = True
+                                        break
+                            except:
+                                pass
+                    except:
+                        pass
+                    
+                    if not phone_found:
+                        try:
+                            phone_img = await page.query_selector('img[data-marker="phone-popup/phone-image"], img.N0VY9')
+                            if phone_img and await phone_img.is_visible():
+                                phone_src = await phone_img.get_attribute('src')
+                                if phone_src and 'base64' in phone_src:
+                                    flat['phone'] = phone_src
+                                    phone_found = True
+                        except:
+                            pass
+                    
+                    if not phone_found:
+                        flat['phone'] = 'Не удалось получить'
+                else:
+                    flat['phone'] = 'Кнопка не найдена'
+            except:
+                flat['phone'] = 'Ошибка'
+        
         await browser.close()
         return flat
 
 async def parse_cian(url: str):
-    """Парсинг Cian (Desktop режим)"""
+    """Парсинг Cian"""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
         context = await browser.new_context(
@@ -363,102 +482,207 @@ async def parse_cian(url: str):
         
         await page.goto(url, wait_until="domcontentloaded")
         await page.wait_for_timeout(2000)
-
-        flat = {}
-        html = await page.content()
+        
+        # ПРОВЕРКА АКТУАЛЬНОСТИ
+        try:
+            unpublished = await page.query_selector('[data-name="OfferUnpublished"]')
+            if unpublished:
+                await browser.close()
+                return {'status': 'unpublished', 'message': 'Объявление снято'}
+        except:
+            pass
+        
+        flat = {'status': 'active'}
         
         try:
-            flat['title'] = (await page.inner_text("h1")).strip()
-        except: 
-            m = re.search(r'(Сдается [^<\n]+м²)', html)
-            flat['title'] = m.group(1) if m else None
-
-        m = re.search(r'ЖК\s*[«"]([^»"<\n]+)', html)
-        flat['complex'] = m.group(1).strip() if m else None
-
+            h1 = await page.query_selector("h1")
+            flat['summary'] = (await h1.inner_text()).strip() if h1 else None
+        except:
+            flat['summary'] = None
+        
         try:
             price_el = await page.query_selector("[data-testid='price-amount']")
             flat['price'] = (await price_el.inner_text()).strip() if price_el else None
-        except: 
+        except:
             flat['price'] = None
-
+        
         try:
-            addr_items = await page.query_selector_all('[data-name="AddressItem"]')
+            address_items = await page.query_selector_all('[data-name="AddressItem"]')
             address_parts = []
-            for item in addr_items:
+            for item in address_items:
                 address_parts.append((await item.inner_text()).strip())
             flat['address'] = ', '.join(address_parts) if address_parts else None
-        except: 
+        except:
             flat['address'] = None
-
+        
+        try:
+            jk_el = await page.query_selector('[data-name="ParentNew"] a')
+            flat['jk'] = (await jk_el.inner_text()).strip() if jk_el else None
+        except:
+            flat['jk'] = None
+        
         try:
             metros = []
-            for elem in await page.query_selector_all('[data-name="UndergroundItem"] a'):
-                metros.append((await elem.inner_text()).strip())
+            metro_items = await page.query_selector_all('[data-name="UndergroundItem"]')
+            for item in metro_items:
+                try:
+                    link = await item.query_selector('a')
+                    station = (await link.inner_text()).strip() if link else None
+                    time_el = await item.query_selector('.xa15a2ab7--d9f62d--underground_time')
+                    if time_el:
+                        time_text = (await time_el.inner_text()).strip()
+                        metros.append(f"{station} ({time_text})")
+                    else:
+                        metros.append(station)
+                except:
+                    pass
             flat['metro'] = metros
-        except: 
-            flat['metro'] = []
-
-        params = {}
-        try:
-            params_elems = await page.query_selector_all('[data-name="OfferSummaryInfoItem"]')
-            for item in params_elems:
-                try:
-                    label_el = await item.query_selector('p[class*="color_gray60"]')
-                    value_el = await item.query_selector('p[class*="color_text-primary"]')
-                    if label_el and value_el:
-                        key = (await label_el.inner_text()).strip()
-                        value = (await value_el.inner_text()).strip()
-                        params[key] = value
-                except: 
-                    continue
-        except: 
-            pass
-        flat['params'] = params
-
-        try:
-            features = []
-            feature_items = await page.query_selector_all('[data-name="FeaturesItem"]')
-            for item in feature_items:
-                try:
-                    feature_text = (await item.inner_text()).strip()
-                    if feature_text:
-                        features.append(feature_text)
-                except: 
-                    continue
-            flat['features'] = features
         except:
-            flat['features'] = []
-
+            flat['metro'] = []
+        
+        # Оплата
         try:
-            desc_el = await page.query_selector("[data-mark='Description']")
-            flat['description'] = (await desc_el.inner_text()).strip() if desc_el else None
-        except: 
-            flat['description'] = None
-
+            payment_items = await page.query_selector_all('[data-name="OfferFactItem"]')
+            payment_zhkh = payment_deposit = payment_commission = payment_prepay = payment_term = None
+            
+            for item in payment_items:
+                try:
+                    spans = await item.query_selector_all('span')
+                    if len(spans) >= 2:
+                        key = (await spans[0].inner_text()).strip()
+                        value = (await spans[1].inner_text()).strip()
+                        
+                        if 'Оплата ЖКХ' in key:
+                            payment_zhkh = value
+                        elif 'Залог' in key:
+                            payment_deposit = value
+                        elif 'Комиссии' in key or 'Комиссия' in key:
+                            payment_commission = value
+                        elif 'Предоплата' in key:
+                            payment_prepay = value
+                        elif 'Срок аренды' in key:
+                            payment_term = value
+                except:
+                    pass
+            
+            flat.update({
+                'payment_zhkh': payment_zhkh,
+                'payment_deposit': payment_deposit,
+                'payment_commission': payment_commission,
+                'payment_prepay': payment_prepay,
+                'payment_term': payment_term
+            })
+        except:
+            pass
+        
+        # Характеристики
         try:
-            photo_urls = []
-            thumb_imgs = await page.query_selector_all('[data-name="PaginationThumbsComponent"] img')
-            for img in thumb_imgs:
-                src = await img.get_attribute('src')
-                if src and 'cdn-cian.ru/images' in src:
-                    full_src = src.replace('-2.jpg', '-1.jpg')
-                    if full_src not in photo_urls:
-                        photo_urls.append(full_src)
-            flat['photos'] = photo_urls
+            info_items = await page.query_selector_all('[data-testid="OfferSummaryInfoItem"]')
+            total_area = living_area = kitchen_area = layout = bathroom = year_built = elevators = parking = None
+            
+            for item in info_items:
+                try:
+                    paragraphs = await item.query_selector_all('p')
+                    if len(paragraphs) >= 2:
+                        key = (await paragraphs[0].inner_text()).strip()
+                        value = (await paragraphs[1].inner_text()).strip()
+                        
+                        if 'Общая площадь' in key:
+                            total_area = value
+                        elif 'Жилая площадь' in key:
+                            living_area = value
+                        elif 'Площадь кухни' in key:
+                            kitchen_area = value
+                        elif 'Планировка' in key:
+                            layout = value
+                        elif 'Санузел' in key:
+                            bathroom = value
+                        elif 'Год постройки' in key:
+                            year_built = value
+                        elif 'Количество лифтов' in key:
+                            elevators = value
+                        elif 'Парковка' in key:
+                            parking = value
+                except:
+                    pass
+            
+            flat.update({
+                'total_area': total_area,
+                'living_area': living_area,
+                'kitchen_area': kitchen_area,
+                'layout': layout,
+                'bathroom': bathroom,
+                'year_built': year_built,
+                'elevators': elevators,
+                'parking': parking
+            })
+        except:
+            pass
+        
+        # Удобства
+        try:
+            amenities = []
+            amenity_items = await page.query_selector_all('[data-name="FeaturesItem"]')
+            for item in amenity_items:
+                try:
+                    amenity = (await item.inner_text()).strip()
+                    if amenity:
+                        amenities.append(amenity)
+                except:
+                    pass
+            flat['amenities'] = amenities
+        except:
+            flat['amenities'] = []
+        
+        # Фото
+        try:
+            photos = []
+            photo_items = await page.query_selector_all('[data-name="ThumbComponent"] img')
+            for photo in photo_items:
+                try:
+                    src = await photo.get_attribute('src')
+                    if src and 'http' in src:
+                        photos.append(src)
+                except:
+                    pass
+            flat['photos'] = photos
         except:
             flat['photos'] = []
-
-        flat['parsed_mode'] = 'desktop'
-
+        
+        # Телефон
+        try:
+            contacts_btn = await page.query_selector('[data-testid="contacts-button"]')
+            if contacts_btn and await contacts_btn.is_visible():
+                await contacts_btn.click()
+                await asyncio.sleep(1)
+            
+            phone_link = await page.query_selector('[data-testid="PhoneLink"]')
+            phone = None
+            
+            try:
+                href = await phone_link.get_attribute('href')
+                if href and href.startswith('tel:'):
+                    phone = href.replace('tel:', '').strip()
+            except:
+                pass
+            
+            if not phone:
+                try:
+                    phone = (await phone_link.inner_text()).strip()
+                except:
+                    phone = 'Не удалось получить'
+            
+            flat['phone'] = phone
+        except:
+            flat['phone'] = 'Не удалось получить'
+        
         await browser.close()
         return flat
 
 @app.get("/")
 async def root():
     return {
-        "service": "Парсер Avito (Desktop 🖥️) & Cian 🚀",
-        "avito_mode": "Desktop (MacBook Pro) + Cookies + Homepage visit",
+        "service": "Парсер Avito & Cian 🚀",
         "cookies_loaded": os.path.exists(COOKIES_FILE),
         "endpoints": {
             "POST /parse": "Парсить {\"url\": \"https://...\"}"
