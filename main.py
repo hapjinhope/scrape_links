@@ -85,8 +85,10 @@ async def click_continue_if_exists(page):
     except:
         return False
 
-async def parse_avito(url: str):
-    """Парсинг Avito"""
+async def parse_avito(url: str, mode: str = "full"):
+    """
+    mode: "full" = полный парсинг / "check" = актуальность + цена
+    """
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -115,7 +117,6 @@ async def parse_avito(url: str):
         }
         
         if os.path.exists(COOKIES_FILE):
-            print(f"[INFO] 🍪 Загружаю cookies")
             context_options["storage_state"] = COOKIES_FILE
         
         context = await browser.new_context(**context_options)
@@ -128,27 +129,30 @@ async def parse_avito(url: str):
         page = await context.new_page()
         page.set_default_timeout(90000)
         
-        # Главная
-        try:
-            await page.goto("https://www.avito.ru/", wait_until="domcontentloaded")
-            await page.wait_for_timeout(2000)
-            await close_modals(page)
-            await emulate_human_behavior(page)
-        except:
-            pass
+        # Главная (только для full mode)
+        if mode == "full":
+            try:
+                await page.goto("https://www.avito.ru/", wait_until="domcontentloaded")
+                await page.wait_for_timeout(2000)
+                await close_modals(page)
+                await emulate_human_behavior(page)
+            except:
+                pass
         
         # Объявление
         await page.goto(url, wait_until="domcontentloaded")
-        await page.wait_for_timeout(3000)
+        await page.wait_for_timeout(1000 if mode == "check" else 3000)
         await close_modals(page)
-        await emulate_human_behavior(page)
+        
+        if mode == "full":
+            await emulate_human_behavior(page)
         
         try:
             await context.storage_state(path=COOKIES_FILE)
         except:
             pass
         
-        # ПРОВЕРКА АКТУАЛЬНОСТИ
+        # ПРОВЕРКА АКТУАЛЬНОСТИ (всегда)
         try:
             unpublished = await page.query_selector('h1.EEPdn:has-text("Объявление не")')
             if unpublished:
@@ -157,7 +161,30 @@ async def parse_avito(url: str):
         except:
             pass
         
-        # ПРОВЕРКА ТИПА СВЯЗИ
+        # ЦЕНА (всегда)
+        try:
+            price_el = await page.query_selector('span[content][itemprop="price"]')
+            if price_el:
+                price_value = await price_el.get_attribute('content')
+                currency_el = await page.query_selector('span[itemprop="priceCurrency"]')
+                currency = (await currency_el.inner_text()).strip() if currency_el else ''
+                price = f"{price_value} {currency}"
+            else:
+                price_el2 = await page.query_selector('.hQ3Iv[data-marker="item-view/item-price"]')
+                price = (await price_el2.inner_text()).strip() if price_el2 else None
+        except:
+            price = None
+        
+        # РЕЖИМ "check" - только актуальность + цена
+        if mode == "check":
+            await browser.close()
+            return {
+                'status': 'active',
+                'price': price,
+                'mode': 'quick_check'
+            }
+        
+        # РЕЖИМ "full" - весь парсинг
         messages_only = False
         try:
             no_calls = await page.query_selector('button:has-text("Без звонков")')
@@ -166,27 +193,13 @@ async def parse_avito(url: str):
         except:
             pass
         
-        # ДАННЫЕ
-        flat = {'status': 'active', 'messages_only': messages_only}
+        flat = {'status': 'active', 'messages_only': messages_only, 'price': price}
         
         try:
             title_el = await page.query_selector('h1[itemprop="name"]')
             flat['summary'] = (await title_el.inner_text()).strip() if title_el else None
         except:
             flat['summary'] = None
-        
-        try:
-            price_el = await page.query_selector('span[content][itemprop="price"]')
-            if price_el:
-                price_value = await price_el.get_attribute('content')
-                currency_el = await page.query_selector('span[itemprop="priceCurrency"]')
-                currency = (await currency_el.inner_text()).strip() if currency_el else ''
-                flat['price'] = f"{price_value} {currency}"
-            else:
-                price_el2 = await page.query_selector('.hQ3Iv[data-marker="item-view/item-price"]')
-                flat['price'] = (await price_el2.inner_text()).strip() if price_el2 else None
-        except:
-            flat['price'] = None
         
         try:
             addr_el = await page.query_selector('span.xLPJ6')
@@ -282,23 +295,12 @@ async def parse_avito(url: str):
                     pass
             
             flat.update({
-                'rooms_count': rooms_count,
-                'total_area': total_area,
-                'kitchen_area': kitchen_area,
-                'floor': floor,
-                'floors_total': floors_total,
-                'room_type': room_type,
-                'bathroom': bathroom,
-                'repair': repair,
-                'appliances': appliances,
-                'deposit': deposit,
-                'commission': commission,
-                'kids': kids,
-                'pets': pets,
-                'year_built': year_built,
-                'elevator_passenger': elevator_passenger,
-                'elevator_cargo': elevator_cargo,
-                'parking': parking
+                'rooms_count': rooms_count, 'total_area': total_area, 'kitchen_area': kitchen_area,
+                'floor': floor, 'floors_total': floors_total, 'room_type': room_type,
+                'bathroom': bathroom, 'repair': repair, 'appliances': appliances,
+                'deposit': deposit, 'commission': commission, 'kids': kids, 'pets': pets,
+                'year_built': year_built, 'elevator_passenger': elevator_passenger,
+                'elevator_cargo': elevator_cargo, 'parking': parking
             })
         except:
             pass
@@ -330,10 +332,8 @@ async def parse_avito(url: str):
                         pass
             
             flat.update({
-                'house_deposit': house_deposit,
-                'house_commission': house_commission,
-                'utilities_counters': utilities_counters,
-                'utilities_other': utilities_other
+                'house_deposit': house_deposit, 'house_commission': house_commission,
+                'utilities_counters': utilities_counters, 'utilities_other': utilities_other
             })
         except:
             pass
@@ -468,8 +468,10 @@ async def parse_avito(url: str):
         await browser.close()
         return flat
 
-async def parse_cian(url: str):
-    """Парсинг Cian"""
+async def parse_cian(url: str, mode: str = "full"):
+    """
+    mode: "full" = полный парсинг / "check" = актуальность + цена
+    """
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
         context = await browser.new_context(
@@ -481,9 +483,9 @@ async def parse_cian(url: str):
         page.set_default_timeout(60000)
         
         await page.goto(url, wait_until="domcontentloaded")
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(1000 if mode == "check" else 2000)
         
-        # ПРОВЕРКА АКТУАЛЬНОСТИ
+        # ПРОВЕРКА АКТУАЛЬНОСТИ (всегда)
         try:
             unpublished = await page.query_selector('[data-name="OfferUnpublished"]')
             if unpublished:
@@ -492,19 +494,30 @@ async def parse_cian(url: str):
         except:
             pass
         
-        flat = {'status': 'active'}
+        # ЦЕНА (всегда)
+        try:
+            price_el = await page.query_selector("[data-testid='price-amount']")
+            price = (await price_el.inner_text()).strip() if price_el else None
+        except:
+            price = None
+        
+        # РЕЖИМ "check"
+        if mode == "check":
+            await browser.close()
+            return {
+                'status': 'active',
+                'price': price,
+                'mode': 'quick_check'
+            }
+        
+        # РЕЖИМ "full"
+        flat = {'status': 'active', 'price': price}
         
         try:
             h1 = await page.query_selector("h1")
             flat['summary'] = (await h1.inner_text()).strip() if h1 else None
         except:
             flat['summary'] = None
-        
-        try:
-            price_el = await page.query_selector("[data-testid='price-amount']")
-            flat['price'] = (await price_el.inner_text()).strip() if price_el else None
-        except:
-            flat['price'] = None
         
         try:
             address_items = await page.query_selector_all('[data-name="AddressItem"]')
@@ -566,10 +579,8 @@ async def parse_cian(url: str):
                     pass
             
             flat.update({
-                'payment_zhkh': payment_zhkh,
-                'payment_deposit': payment_deposit,
-                'payment_commission': payment_commission,
-                'payment_prepay': payment_prepay,
+                'payment_zhkh': payment_zhkh, 'payment_deposit': payment_deposit,
+                'payment_commission': payment_commission, 'payment_prepay': payment_prepay,
                 'payment_term': payment_term
             })
         except:
@@ -607,14 +618,9 @@ async def parse_cian(url: str):
                     pass
             
             flat.update({
-                'total_area': total_area,
-                'living_area': living_area,
-                'kitchen_area': kitchen_area,
-                'layout': layout,
-                'bathroom': bathroom,
-                'year_built': year_built,
-                'elevators': elevators,
-                'parking': parking
+                'total_area': total_area, 'living_area': living_area, 'kitchen_area': kitchen_area,
+                'layout': layout, 'bathroom': bathroom, 'year_built': year_built,
+                'elevators': elevators, 'parking': parking
             })
         except:
             pass
@@ -685,20 +691,43 @@ async def root():
         "service": "Парсер Avito & Cian 🚀",
         "cookies_loaded": os.path.exists(COOKIES_FILE),
         "endpoints": {
-            "POST /parse": "Парсить {\"url\": \"https://...\"}"
+            "POST /parse": "Полный парсинг (все данные)",
+            "POST /check": "Быстрая проверка (актуальность + цена)"
         }
     }
 
 @app.post("/parse")
 async def parse_flat(request: ParseRequest):
+    """Полный парсинг"""
     url_str = str(request.url)
     
     try:
         if 'avito.ru' in url_str:
-            result = await parse_avito(url_str)
+            result = await parse_avito(url_str, mode="full")
             result['source'] = 'avito'
         elif 'cian.ru' in url_str:
-            result = await parse_cian(url_str)
+            result = await parse_cian(url_str, mode="full")
+            result['source'] = 'cian'
+        else:
+            raise HTTPException(status_code=400, detail="Только Avito и Cian")
+        
+        result['url'] = url_str
+        return JSONResponse(content=result)
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка: {str(e)}")
+
+@app.post("/check")
+async def check_flat(request: ParseRequest):
+    """Быстрая проверка: актуальность + цена"""
+    url_str = str(request.url)
+    
+    try:
+        if 'avito.ru' in url_str:
+            result = await parse_avito(url_str, mode="check")
+            result['source'] = 'avito'
+        elif 'cian.ru' in url_str:
+            result = await parse_cian(url_str, mode="check")
             result['source'] = 'cian'
         else:
             raise HTTPException(status_code=400, detail="Только Avito и Cian")
