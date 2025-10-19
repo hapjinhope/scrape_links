@@ -7,6 +7,16 @@ from playwright.async_api import async_playwright
 import random
 import os
 import json
+import time
+import logging
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Парсер квартир Avito & Cian")
 
@@ -700,6 +710,11 @@ async def root():
 async def parse_flat(request: ParseRequest):
     """Полный парсинг"""
     url_str = str(request.url)
+    start_time = time.time()
+    
+    source = 'avito' if 'avito.ru' in url_str else 'cian' if 'cian.ru' in url_str else None
+    
+    logger.info(f"🚀 ЗАПУСК /parse - {source.upper()} - {url_str[:60]}...")
     
     try:
         if 'avito.ru' in url_str:
@@ -711,16 +726,29 @@ async def parse_flat(request: ParseRequest):
         else:
             raise HTTPException(status_code=400, detail="Только Avito и Cian")
         
+        elapsed = time.time() - start_time
         result['url'] = url_str
+        result['parse_duration'] = f"{elapsed:.2f}s"
+        
+        status_emoji = "✅" if result.get('status') == 'active' else "⚠️"
+        logger.info(f"{status_emoji} ЗАВЕРШЕНО /parse - {source.upper()} - {elapsed:.2f}s - Status: {result.get('status')}")
+        
         return JSONResponse(content=result)
     
     except Exception as e:
+        elapsed = time.time() - start_time
+        logger.error(f"❌ ОШИБКА /parse - {source.upper()} - {elapsed:.2f}s - {str(e)}")
         raise HTTPException(status_code=500, detail=f"Ошибка: {str(e)}")
 
 @app.post("/check")
 async def check_flat(request: ParseRequest):
     """Быстрая проверка: актуальность + цена"""
     url_str = str(request.url)
+    start_time = time.time()
+    
+    source = 'avito' if 'avito.ru' in url_str else 'cian' if 'cian.ru' in url_str else None
+    
+    logger.info(f"⚡ ЗАПУСК /check - {source.upper()} - {url_str[:60]}...")
     
     try:
         if 'avito.ru' in url_str:
@@ -732,10 +760,18 @@ async def check_flat(request: ParseRequest):
         else:
             raise HTTPException(status_code=400, detail="Только Avito и Cian")
         
+        elapsed = time.time() - start_time
         result['url'] = url_str
+        result['check_duration'] = f"{elapsed:.2f}s"
+        
+        status_emoji = "✅" if result.get('status') == 'active' else "⚠️"
+        logger.info(f"{status_emoji} ЗАВЕРШЕНО /check - {source.upper()} - {elapsed:.2f}s - Status: {result.get('status')}")
+        
         return JSONResponse(content=result)
     
     except Exception as e:
+        elapsed = time.time() - start_time
+        logger.error(f"❌ ОШИБКА /check - {source.upper()} - {elapsed:.2f}s - {str(e)}")
         raise HTTPException(status_code=500, detail=f"Ошибка: {str(e)}")
 
 if __name__ == "__main__":
