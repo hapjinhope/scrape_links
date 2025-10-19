@@ -126,8 +126,18 @@ async def parse_avito(url: str, mode: str = "full"):
             "device_scale_factor": 1,
         }
         
+        # ЗАГРУЗКА COOKIES
         if os.path.exists(COOKIES_FILE):
-            context_options["storage_state"] = COOKIES_FILE
+            try:
+                with open(COOKIES_FILE, 'r') as f:
+                    cookies_data = json.load(f)
+                    cookies_count = len(cookies_data.get('cookies', []))
+                    logger.info(f"🍪 Загружаю cookies: {cookies_count} шт из {COOKIES_FILE}")
+                context_options["storage_state"] = COOKIES_FILE
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка загрузки cookies: {e}")
+        else:
+            logger.info(f"🍪 Cookies файл не найден, работаю без cookies")
         
         context = await browser.new_context(**context_options)
         
@@ -157,10 +167,17 @@ async def parse_avito(url: str, mode: str = "full"):
         if mode == "full":
             await emulate_human_behavior(page)
         
+        # СОХРАНЕНИЕ COOKIES
         try:
-            await context.storage_state(path=COOKIES_FILE)
-        except:
-            pass
+            storage_state = await context.storage_state()
+            new_cookies_count = len(storage_state.get('cookies', []))
+            
+            with open(COOKIES_FILE, 'w') as f:
+                json.dump(storage_state, f, ensure_ascii=False, indent=2)
+            
+            logger.info(f"🍪 Cookies обновлены: {new_cookies_count} шт → {COOKIES_FILE}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения cookies: {e}")
         
         # ПРОВЕРКА АКТУАЛЬНОСТИ (всегда)
         try:
