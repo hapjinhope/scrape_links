@@ -371,48 +371,91 @@ async def parse_avito(url: str, mode: str = "full"):
             flat.update({'rules_kids': rules_kids, 'rules_pets': rules_pets})
         except:
             pass
-        
+
         try:
-            photos = set()
-            await page.evaluate("window.scrollTo(0, 200)")
-            await asyncio.sleep(1)
+            photos = set()  # Используем set для избежания дубликатов
             
-            carousel = await page.query_selector('ul.Jue7e')
-            if carousel:
-                total_items = len(await page.query_selector_all('ul.Jue7e li.Kg235'))
-                max_clicks = total_items if total_items > 0 else 30
-                click_count = 0
+            # Узнаём количество фото из счётчика
+            photo_count = 0
+            try:
+                count_button = await page.query_selector('button:has-text("фото")')
+                if count_button:
+                    count_text = (await count_button.inner_text()).strip()
+                    match = re.search(r'(\d+)', count_text)
+                    if match:
+                        photo_count = int(match.group(1))
+                        logger.info(f"Обнаружено {photo_count} фото в объявлении")
+            except:
+                photo_count = 24  # Значение по умолчанию
+            
+            # Способ 1: Достаём из галереи с кликами
+            try:
+                # Ждём загрузки галереи
+                await page.wait_for_selector('[data-name="GalleryInnerComponent"]', timeout=5000)
                 
-                while click_count < max_clicks:
-                    gallery_photos = await page.query_selector_all('#gallery-slider img[src*="avito.st"]')
-                    
-                    for photo in gallery_photos:
-                        try:
-                            src = await photo.get_attribute('src')
-                            if src and 'avito.st' in src and 'http' in src:
-                                clean_url = src.split('?')[0]
-                                photos.add(clean_url)
-                        except:
-                            pass
-                    
-                    if len(photos) >= total_items:
-                        break
-                    
+                # Кликаем по стрелке "Следующее изображение" и собираем фото
+                next_button_selector = 'button[title="Следующее изображение"]'
+                
+                for i in range(photo_count):
+                    # Достаём текущее фото из основной галереи
                     try:
-                        next_button = await page.query_selector('button.LJZ92.bTaFV')
-                        if next_button and await next_button.is_visible():
-                            await next_button.click()
-                            click_count += 1
-                            await asyncio.sleep(0.8)
-                        else:
-                            break
+                        gallery_imgs = await page.query_selector_all('[data-name="GalleryInnerComponent"] img')
+                        for img in gallery_imgs:
+                            src = await img.get_attribute('src')
+                            if src and 'http' in src and 'images.cdn-cian.ru' in src:
+                                # Конвертируем в полный размер: -1.jpg вместо -2.jpg (миниатюра)
+                                full_url = src.replace('-2.jpg', '.jpg').replace('-1.jpg', '.jpg')
+                                photos.add(full_url)
                     except:
-                        break
+                        pass
+                    
+                    # Кликаем на кнопку "Следующее" если это не последнее фото
+                    if i < photo_count - 1:
+                        try:
+                            next_button = await page.query_selector(next_button_selector)
+                            if next_button and await next_button.is_visible():
+                                await next_button.click()
+                                await asyncio.sleep(0.3)  # Небольшая задержка для загрузки
+                        except:
+                            break
+                
+                logger.info(f"Способ 1 (галерея с кликами): собрано {len(photos)} фото")
+            except Exception as e:
+                logger.warning(f"Способ 1 не сработал: {e}")
+            
+            # Способ 2: Достаём из миниатюр (fallback)
+            if len(photos) < photo_count:
+                try:
+                    thumb_items = await page.query_selector_all('[data-name="PaginationThumbsComponent"] [data-name="ThumbComponent"] img')
+                    for img in thumb_items:
+                        src = await img.get_attribute('src')
+                        if src and 'http' in src:
+                            # Конвертируем миниатюру в полный размер
+                            full_url = src.replace('-2.jpg', '.jpg')
+                            photos.add(full_url)
+                    logger.info(f"Способ 2 (миниатюры): добавлено {len(photos) - len(photos)} фото")
+                except:
+                    pass
+            
+            # Способ 3: Парсим все img на странице (последний fallback)
+            if len(photos) < 5:
+                try:
+                    all_imgs = await page.query_selector_all('img[src*="images.cdn-cian.ru"]')
+                    for img in all_imgs:
+                        src = await img.get_attribute('src')
+                        if src and '/kvartira-' in src:
+                            full_url = src.replace('-2.jpg', '.jpg').replace('-1.jpg', '.jpg')
+                            photos.add(full_url)
+                except:
+                    pass
             
             flat['photos'] = list(photos)
-        except:
+            logger.info(f"✅ Итого собрано {len(flat['photos'])} уникальных фото")
+            
+        except Exception as e:
+            logger.error(f"Ошибка парсинга фото: {e}")
             flat['photos'] = []
-        
+
         if messages_only:
             flat['phone'] = 'только сообщения'
         else:
