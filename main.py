@@ -96,9 +96,7 @@ async def click_continue_if_exists(page):
         return False
 
 async def parse_avito(url: str, mode: str = "full"):
-    """
-    mode: "full" = полный парсинг / "check" = актуальность + цена
-    """
+    """mode: "full" = полный парсинг / "check" = актуальность + цена"""
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -126,7 +124,6 @@ async def parse_avito(url: str, mode: str = "full"):
             "device_scale_factor": 1,
         }
         
-        # ЗАГРУЗКА COOKIES
         if os.path.exists(COOKIES_FILE):
             try:
                 with open(COOKIES_FILE, 'r') as f:
@@ -149,7 +146,6 @@ async def parse_avito(url: str, mode: str = "full"):
         page = await context.new_page()
         page.set_default_timeout(90000)
         
-        # Главная (только для full mode)
         if mode == "full":
             try:
                 await page.goto("https://www.avito.ru/", wait_until="domcontentloaded")
@@ -159,7 +155,6 @@ async def parse_avito(url: str, mode: str = "full"):
             except:
                 pass
         
-        # Объявление
         await page.goto(url, wait_until="domcontentloaded")
         await page.wait_for_timeout(1000 if mode == "check" else 3000)
         await close_modals(page)
@@ -167,19 +162,15 @@ async def parse_avito(url: str, mode: str = "full"):
         if mode == "full":
             await emulate_human_behavior(page)
         
-        # СОХРАНЕНИЕ COOKIES
         try:
             storage_state = await context.storage_state()
             new_cookies_count = len(storage_state.get('cookies', []))
-            
             with open(COOKIES_FILE, 'w') as f:
                 json.dump(storage_state, f, ensure_ascii=False, indent=2)
-            
             logger.info(f"🍪 Cookies обновлены: {new_cookies_count} шт → {COOKIES_FILE}")
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения cookies: {e}")
         
-        # ПРОВЕРКА АКТУАЛЬНОСТИ (всегда)
         try:
             unpublished = await page.query_selector('h1.EEPdn:has-text("Объявление не")')
             if unpublished:
@@ -188,7 +179,6 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             pass
         
-        # ЦЕНА (всегда)
         try:
             price_el = await page.query_selector('span[content][itemprop="price"]')
             if price_el:
@@ -202,16 +192,10 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             price = None
         
-        # РЕЖИМ "check" - только актуальность + цена
         if mode == "check":
             await browser.close()
-            return {
-                'status': 'active',
-                'price': price,
-                'mode': 'quick_check'
-            }
+            return {'status': 'active', 'price': price, 'mode': 'quick_check'}
         
-        # РЕЖИМ "full" - весь парсинг
         messages_only = False
         try:
             no_calls = await page.query_selector('button:has-text("Без звонков")')
@@ -268,7 +252,6 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             flat['seller_name'] = None
         
-        # Параметры квартиры
         try:
             params_list = await page.query_selector_all('ul.HRzg1 li.cHzV4')
             rooms_count = total_area = kitchen_area = floor = floors_total = room_type = bathroom = repair = appliances = deposit = commission = kids = pets = year_built = elevator_passenger = elevator_cargo = parking = None
@@ -332,7 +315,6 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             pass
         
-        # Параметры дома
         try:
             all_params_blocks = await page.query_selector_all('ul.HRzg1')
             house_deposit = house_commission = utilities_counters = utilities_other = None
@@ -365,7 +347,6 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             pass
         
-        # Правила
         try:
             all_params_blocks = await page.query_selector_all('ul.HRzg1')
             rules_kids = rules_pets = None
@@ -391,7 +372,6 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             pass
         
-        # ФОТО
         try:
             photos = set()
             await page.evaluate("window.scrollTo(0, 200)")
@@ -433,7 +413,6 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             flat['photos'] = []
         
-        # ТЕЛЕФОН
         if messages_only:
             flat['phone'] = 'только сообщения'
         else:
@@ -496,9 +475,7 @@ async def parse_avito(url: str, mode: str = "full"):
         return flat
 
 async def parse_cian(url: str, mode: str = "full"):
-    """
-    mode: "full" = полный парсинг / "check" = актуальность + цена
-    """
+    """mode: "full" = полный парсинг / "check" = актуальность + цена"""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
         context = await browser.new_context(
@@ -512,7 +489,6 @@ async def parse_cian(url: str, mode: str = "full"):
         await page.goto(url, wait_until="domcontentloaded")
         await page.wait_for_timeout(1000 if mode == "check" else 2000)
         
-        # ПРОВЕРКА АКТУАЛЬНОСТИ (всегда)
         try:
             unpublished = await page.query_selector('[data-name="OfferUnpublished"]')
             if unpublished:
@@ -521,23 +497,16 @@ async def parse_cian(url: str, mode: str = "full"):
         except:
             pass
         
-        # ЦЕНА (всегда)
         try:
             price_el = await page.query_selector("[data-testid='price-amount']")
             price = (await price_el.inner_text()).strip() if price_el else None
         except:
             price = None
         
-        # РЕЖИМ "check"
         if mode == "check":
             await browser.close()
-            return {
-                'status': 'active',
-                'price': price,
-                'mode': 'quick_check'
-            }
+            return {'status': 'active', 'price': price, 'mode': 'quick_check'}
         
-        # РЕЖИМ "full"
         flat = {'status': 'active', 'price': price}
         
         try:
@@ -580,7 +549,6 @@ async def parse_cian(url: str, mode: str = "full"):
         except:
             flat['metro'] = []
         
-        # Оплата
         try:
             payment_items = await page.query_selector_all('[data-name="OfferFactItem"]')
             payment_zhkh = payment_deposit = payment_commission = payment_prepay = payment_term = None
@@ -613,10 +581,41 @@ async def parse_cian(url: str, mode: str = "full"):
         except:
             pass
         
-        # Характеристики
+        # ПАРСИНГ ЭТАЖНОСТИ (приоритет ObjectFactoids, fallback на OfferSummaryInfoItem)
         try:
+            total_area = living_area = kitchen_area = floor = floors_total = year_built = None
+            layout = bathroom = elevators = parking = None
+            
+            # Попытка 1: ObjectFactoids
+            factoid_items = await page.query_selector_all('[data-name="ObjectFactoidsItem"]')
+            
+            for item in factoid_items:
+                try:
+                    spans = await item.query_selector_all('span')
+                    if len(spans) >= 2:
+                        key = (await spans[0].inner_text()).strip()
+                        value = (await spans[1].inner_text()).strip()
+                        
+                        if 'Общая площадь' in key:
+                            total_area = value
+                        elif 'Жилая площадь' in key:
+                            living_area = value
+                        elif 'Площадь кухни' in key:
+                            kitchen_area = value
+                        elif key == 'Этаж' and 'из' in value:
+                            try:
+                                parts = value.split('из')
+                                floor = parts[0].strip()
+                                floors_total = parts[1].strip()
+                            except:
+                                floor = value
+                        elif 'Год постройки' in key:
+                            year_built = value
+                except:
+                    pass
+            
+            # Попытка 2: OfferSummaryInfoItem (если не нашли в ObjectFactoids)
             info_items = await page.query_selector_all('[data-testid="OfferSummaryInfoItem"]')
-            total_area = living_area = kitchen_area = layout = bathroom = year_built = elevators = parking = None
             
             for item in info_items:
                 try:
@@ -625,34 +624,48 @@ async def parse_cian(url: str, mode: str = "full"):
                         key = (await paragraphs[0].inner_text()).strip()
                         value = (await paragraphs[1].inner_text()).strip()
                         
-                        if 'Общая площадь' in key:
+                        # Только если не было в ObjectFactoids
+                        if not total_area and 'Общая площадь' in key:
                             total_area = value
-                        elif 'Жилая площадь' in key:
+                        elif not living_area and 'Жилая площадь' in key:
                             living_area = value
-                        elif 'Площадь кухни' in key:
+                        elif not kitchen_area and 'Площадь кухни' in key:
                             kitchen_area = value
+                        elif not floor and key == 'Этаж' and 'из' in value:
+                            try:
+                                parts = value.split('из')
+                                floor = parts[0].strip()
+                                floors_total = parts[1].strip()
+                            except:
+                                floor = value
+                        elif not year_built and 'Год постройки' in key:
+                            year_built = value
+                        # Другие поля только из OfferSummaryInfoItem
                         elif 'Планировка' in key:
                             layout = value
                         elif 'Санузел' in key:
                             bathroom = value
-                        elif 'Год постройки' in key:
-                            year_built = value
                         elif 'Количество лифтов' in key:
                             elevators = value
                         elif 'Парковка' in key:
                             parking = value
+                        elif 'Высота потолков' in key:
+                            flat['ceiling_height'] = value
+                        elif 'Ремонт' in key:
+                            flat['repair'] = value
                 except:
                     pass
             
             flat.update({
                 'total_area': total_area, 'living_area': living_area, 'kitchen_area': kitchen_area,
+                'floor': floor, 'floors_total': floors_total,
                 'layout': layout, 'bathroom': bathroom, 'year_built': year_built,
                 'elevators': elevators, 'parking': parking
             })
-        except:
+        except Exception as e:
+            logger.error(f"Ошибка парсинга характеристик: {e}")
             pass
         
-        # Удобства
         try:
             amenities = []
             amenity_items = await page.query_selector_all('[data-name="FeaturesItem"]')
@@ -667,7 +680,6 @@ async def parse_cian(url: str, mode: str = "full"):
         except:
             flat['amenities'] = []
         
-        # Фото
         try:
             photos = []
             photo_items = await page.query_selector_all('[data-name="ThumbComponent"] img')
@@ -682,7 +694,6 @@ async def parse_cian(url: str, mode: str = "full"):
         except:
             flat['photos'] = []
         
-        # Телефон
         try:
             contacts_btn = await page.query_selector('[data-testid="contacts-button"]')
             if contacts_btn and await contacts_btn.is_visible():
