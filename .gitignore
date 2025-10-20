@@ -12,7 +12,7 @@ ENV/
 .cache/
 playwright-report/
 test-results/
-
+save_cookies.py
 # Results & Screenshots (твои временные файлы)
 results/
 screenshots/
