@@ -705,19 +705,64 @@ async def parse_cian(url: str, mode: str = "full"):
             logger.error(f"Ошибка парсинга описания: {e}")
             flat['description'] = None
 
+        # ПАРСИНГ ФОТО (улучшенный)
         try:
             photos = []
+            
+            # Вариант 1: Миниатюры (самый быстрый)
             photo_items = await page.query_selector_all('[data-name="ThumbComponent"] img')
             for photo in photo_items:
                 try:
                     src = await photo.get_attribute('src')
                     if src and 'http' in src:
-                        photos.append(src)
+                        # Заменяем миниатюру на полный размер
+                        full_url = src.replace('_m.jpg', '.jpg').replace('_s.jpg', '.jpg')
+                        photos.append(full_url)
                 except:
                     pass
-            flat['photos'] = photos
-        except:
+            
+            # Вариант 2: Если мало фото - достаём из галереи
+            if len(photos) < 5:
+                gallery_photos = await page.query_selector_all('[data-name="GalleryPicture"] img')
+                for photo in gallery_photos:
+                    try:
+                        src = await photo.get_attribute('src')
+                        if src and 'http' in src and src not in photos:
+                            photos.append(src)
+                    except:
+                        pass
+            
+            # Вариант 3: Достаём из JSON внутри страницы
+            if len(photos) < 5:
+                try:
+                    photos_json = await page.evaluate("""
+                        () => {
+                            const scripts = Array.from(document.querySelectorAll('script'));
+                            for (const script of scripts) {
+                                const text = script.textContent;
+                                if (text.includes('fullUrl')) {
+                                    try {
+                                        const match = text.match(/"fullUrl":"([^"]+)"/g);
+                                        if (match) {
+                                            return match.map(m => m.match(/"fullUrl":"([^"]+)"/)[1]);
+                                        }
+                                    } catch {}
+                                }
+                            }
+                            return [];
+                        }
+                    """)
+                    if photos_json:
+                        photos.extend([p for p in photos_json if p not in photos])
+                except:
+                    pass
+            
+            flat['photos'] = list(set(photos))  # Убираем дубликаты
+            logger.info(f"Найдено {len(flat['photos'])} фото")
+        except Exception as e:
+            logger.error(f"Ошибка парсинга фото: {e}")
             flat['photos'] = []
+
         
         try:
             contacts_btn = await page.query_selector('[data-testid="contacts-button"]')
