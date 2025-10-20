@@ -372,10 +372,11 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             pass
 
+        # ПАРСИНГ ФОТО (с кликами по галерее - ФИНАЛ)
         try:
-            photos = set()  # Используем set для избежания дубликатов
+            photos = set()
             
-            # Узнаём количество фото из счётчика
+            # Узнаём количество фото
             photo_count = 0
             try:
                 count_button = await page.query_selector('button:has-text("фото")')
@@ -384,77 +385,61 @@ async def parse_avito(url: str, mode: str = "full"):
                     match = re.search(r'(\d+)', count_text)
                     if match:
                         photo_count = int(match.group(1))
-                        logger.info(f"Обнаружено {photo_count} фото в объявлении")
+                        logger.info(f"Обнаружено {photo_count} фото")
             except:
-                photo_count = 24  # Значение по умолчанию
+                photo_count = 30
             
-            # Способ 1: Достаём из галереи с кликами
+            # СПОСОБ 1: Клики по галерее
             try:
-                # Ждём загрузки галереи
                 await page.wait_for_selector('[data-name="GalleryInnerComponent"]', timeout=5000)
-                
-                # Кликаем по стрелке "Следующее изображение" и собираем фото
                 next_button_selector = 'button[title="Следующее изображение"]'
                 
                 for i in range(photo_count):
-                    # Достаём текущее фото из основной галереи
+                    # Достаём текущее фото
                     try:
-                        gallery_imgs = await page.query_selector_all('[data-name="GalleryInnerComponent"] img')
-                        for img in gallery_imgs:
-                            src = await img.get_attribute('src')
-                            if src and 'http' in src and 'images.cdn-cian.ru' in src:
-                                # Конвертируем в полный размер: -1.jpg вместо -2.jpg (миниатюра)
+                        current_img = await page.query_selector('[data-name="GalleryInnerComponent"] img')
+                        if current_img:
+                            src = await current_img.get_attribute('src')
+                            if src and 'images.cdn-cian.ru' in src:
                                 full_url = src.replace('-2.jpg', '.jpg').replace('-1.jpg', '.jpg')
                                 photos.add(full_url)
                     except:
                         pass
                     
-                    # Кликаем на кнопку "Следующее" если это не последнее фото
+                    # Кликаем дальше (если не последнее)
                     if i < photo_count - 1:
                         try:
                             next_button = await page.query_selector(next_button_selector)
                             if next_button and await next_button.is_visible():
                                 await next_button.click()
-                                await asyncio.sleep(0.3)  # Небольшая задержка для загрузки
+                                await asyncio.sleep(0.3)
                         except:
                             break
                 
-                logger.info(f"Способ 1 (галерея с кликами): собрано {len(photos)} фото")
+                logger.info(f"Способ 1: {len(photos)} фото")
             except Exception as e:
-                logger.warning(f"Способ 1 не сработал: {e}")
+                logger.warning(f"Способ 1 ошибка: {e}")
             
-            # Способ 2: Достаём из миниатюр (fallback)
+            # СПОСОБ 2: Миниатюры (fallback)
             if len(photos) < photo_count:
                 try:
-                    thumb_items = await page.query_selector_all('[data-name="PaginationThumbsComponent"] [data-name="ThumbComponent"] img')
-                    for img in thumb_items:
+                    thumbs = await page.query_selector_all('[data-name="PaginationThumbsComponent"] [data-name="ThumbComponent"] img')
+                    for img in thumbs:
                         src = await img.get_attribute('src')
-                        if src and 'http' in src:
-                            # Конвертируем миниатюру в полный размер
+                        if src:
                             full_url = src.replace('-2.jpg', '.jpg')
                             photos.add(full_url)
-                    logger.info(f"Способ 2 (миниатюры): добавлено {len(photos) - len(photos)} фото")
-                except:
-                    pass
-            
-            # Способ 3: Парсим все img на странице (последний fallback)
-            if len(photos) < 5:
-                try:
-                    all_imgs = await page.query_selector_all('img[src*="images.cdn-cian.ru"]')
-                    for img in all_imgs:
-                        src = await img.get_attribute('src')
-                        if src and '/kvartira-' in src:
-                            full_url = src.replace('-2.jpg', '.jpg').replace('-1.jpg', '.jpg')
-                            photos.add(full_url)
+                    logger.info(f"Способ 2: {len(photos)} фото (всего)")
                 except:
                     pass
             
             flat['photos'] = list(photos)
-            logger.info(f"✅ Итого собрано {len(flat['photos'])} уникальных фото")
+            logger.info(f"✅ Собрано {len(flat['photos'])} фото")
             
         except Exception as e:
-            logger.error(f"Ошибка парсинга фото: {e}")
+            logger.error(f"Ошибка фото: {e}")
             flat['photos'] = []
+
 
         if messages_only:
             flat['phone'] = 'только сообщения'
