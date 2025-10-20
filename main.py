@@ -613,10 +613,42 @@ async def parse_cian(url: str, mode: str = "full"):
         except:
             pass
         
-        # Характеристики
+        # ПАРСИНГ ХАРАКТЕРИСТИК (приоритет ObjectFactoids → OfferSummaryInfoItem)
         try:
+            total_area = living_area = kitchen_area = floor = floors_total = year_built = None
+            layout = bathroom = elevators = parking = None
+            ceiling_height = repair = windows_view = balcony_count = loggia_count = None
+            
+            # ШАГ 1: Парсим ObjectFactoids (этаж, площади, год)
+            factoid_items = await page.query_selector_all('[data-name="ObjectFactoidsItem"]')
+            
+            for item in factoid_items:
+                try:
+                    spans = await item.query_selector_all('span')
+                    if len(spans) >= 2:
+                        key = (await spans[0].inner_text()).strip()
+                        value = (await spans[1].inner_text()).strip()
+                        
+                        if 'Общая площадь' in key:
+                            total_area = value
+                        elif 'Жилая площадь' in key:
+                            living_area = value
+                        elif 'Площадь кухни' in key:
+                            kitchen_area = value
+                        elif key == 'Этаж' and 'из' in value:
+                            try:
+                                parts = value.split('из')
+                                floor = parts[0].strip()
+                                floors_total = parts[1].strip()
+                            except:
+                                floor = value
+                        elif 'Год постройки' in key:
+                            year_built = value
+                except:
+                    pass
+            
+            # ШАГ 2: Парсим OfferSummaryInfoItem (всё остальное + fallback для этажа)
             info_items = await page.query_selector_all('[data-testid="OfferSummaryInfoItem"]')
-            total_area = living_area = kitchen_area = layout = bathroom = year_built = elevators = parking = None
             
             for item in info_items:
                 try:
@@ -625,18 +657,48 @@ async def parse_cian(url: str, mode: str = "full"):
                         key = (await paragraphs[0].inner_text()).strip()
                         value = (await paragraphs[1].inner_text()).strip()
                         
-                        if 'Общая площадь' in key:
+                        # Площади (если не нашли в ObjectFactoids)
+                        if not total_area and 'Общая площадь' in key:
                             total_area = value
-                        elif 'Жилая площадь' in key:
+                        elif not living_area and 'Жилая площадь' in key:
                             living_area = value
-                        elif 'Площадь кухни' in key:
+                        elif not kitchen_area and 'Площадь кухни' in key:
                             kitchen_area = value
+                        
+                        # Этаж (fallback)
+                        elif not floor and key == 'Этаж' and 'из' in value:
+                            try:
+                                parts = value.split('из')
+                                floor = parts[0].strip()
+                                floors_total = parts[1].strip()
+                            except:
+                                floor = value
+                        
+                        # Год (fallback)
+                        elif not year_built and 'Год постройки' in key:
+                            year_built = value
+                        
+                        # НОВЫЕ ПОЛЯ
+                        elif 'Высота потолков' in key:
+                            ceiling_height = value
+                        elif 'Ремонт' in key:
+                            repair = value
+                        elif 'Вид из окон' in key:
+                            windows_view = value
+                        elif 'Балкон/лоджия' in key or 'Балкон' in key:
+                            # "1 лоджия" или "2 балкона"
+                            balcony_match = re.search(r'(\d+)\s*балкон', value, re.IGNORECASE)
+                            loggia_match = re.search(r'(\d+)\s*лодж', value, re.IGNORECASE)
+                            if balcony_match:
+                                balcony_count = int(balcony_match.group(1))
+                            if loggia_match:
+                                loggia_count = int(loggia_match.group(1))
+                        
+                        # Другие поля
                         elif 'Планировка' in key:
                             layout = value
                         elif 'Санузел' in key:
                             bathroom = value
-                        elif 'Год постройки' in key:
-                            year_built = value
                         elif 'Количество лифтов' in key:
                             elevators = value
                         elif 'Парковка' in key:
@@ -646,11 +708,16 @@ async def parse_cian(url: str, mode: str = "full"):
             
             flat.update({
                 'total_area': total_area, 'living_area': living_area, 'kitchen_area': kitchen_area,
+                'floor': floor, 'floors_total': floors_total,
                 'layout': layout, 'bathroom': bathroom, 'year_built': year_built,
-                'elevators': elevators, 'parking': parking
+                'elevators': elevators, 'parking': parking,
+                'ceiling_height': ceiling_height, 'repair': repair, 'windows_view': windows_view,
+                'balcony_count': balcony_count, 'loggia_count': loggia_count
             })
-        except:
+        except Exception as e:
+            logger.error(f"Ошибка парсинга характеристик: {e}")
             pass
+
         
         # Удобства
         try:
