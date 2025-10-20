@@ -679,7 +679,32 @@ async def parse_cian(url: str, mode: str = "full"):
             flat['amenities'] = amenities
         except:
             flat['amenities'] = []
-        
+                # ПАРСИНГ ОПИСАНИЯ (ДОБАВЬ СЮДА)
+        try:
+            description = None
+            
+            # Вариант 1: Основной селектор с white-space pre-wrap
+            desc_el = await page.query_selector('span.xa15a2ab7--dc75cc--text.xa15a2ab7--dc75cc--text_whiteSpace__pre-wrap')
+            if desc_el:
+                description = (await desc_el.inner_text()).strip()
+            
+            # Вариант 2: Fallback на data-name="Description"
+            if not description:
+                desc_el2 = await page.query_selector('[data-name="Description"]')
+                if desc_el2:
+                    description = (await desc_el2.inner_text()).strip()
+            
+            # Вариант 3: Ещё один fallback
+            if not description:
+                desc_el3 = await page.query_selector('div[itemprop="description"]')
+                if desc_el3:
+                    description = (await desc_el3.inner_text()).strip()
+            
+            flat['description'] = description
+        except Exception as e:
+            logger.error(f"Ошибка парсинга описания: {e}")
+            flat['description'] = None
+
         try:
             photos = []
             photo_items = await page.query_selector_all('[data-name="ThumbComponent"] img')
