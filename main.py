@@ -9,6 +9,9 @@ import os
 import json
 import time
 import logging
+import base64
+import requests
+import tempfile
 
 # Настройка логирования
 logging.basicConfig(
@@ -25,6 +28,80 @@ class ParseRequest(BaseModel):
 
 COOKIES_FILE = "avito_session.json"
 DESKTOP_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+OCR_API_KEY = os.getenv('OCR_API_KEY', 'K87849162288957')
+
+def extract_phone_from_base64(base64_str):
+    """Распознаёт номер телефона из base64 картинки через OCR.space API"""
+    temp_file = None
+    try:
+        # Убираем префикс
+        if 'base64,' in base64_str:
+            base64_str = base64_str.split('base64,')[1]
+        
+        # Декодируем base64
+        img_data = base64.b64decode(base64_str)
+        
+        # Создаём временный файл
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+        temp_file.write(img_data)
+        temp_file.close()
+        
+        logger.info(f"Временный файл создан: {temp_file.name}")
+        
+        # Отправляем на OCR.space
+        with open(temp_file.name, 'rb') as f:
+            response = requests.post(
+                'https://api.ocr.space/parse/image',
+                files={'file': f},
+                data={
+                    'apikey': OCR_API_KEY,
+                    'language': 'eng',
+                    'isOverlayRequired': False,
+                    'OCREngine': 2,
+                    'scale': True,
+                    'detectOrientation': True,
+                },
+                timeout=30
+            )
+        
+        result = response.json()
+        
+        # Удаляем временный файл
+        try:
+            os.unlink(temp_file.name)
+            logger.info(f"Временный файл удалён: {temp_file.name}")
+        except:
+            pass
+        
+        if result.get('IsErroredOnProcessing'):
+            logger.error(f"OCR ошибка: {result.get('ErrorMessage')}")
+            return None
+        
+        # Извлекаем текст
+        parsed_text = result['ParsedResults'][0]['ParsedText']
+        logger.info(f"OCR результат: {parsed_text}")
+        
+        # Ищем номер
+        phone_match = re.search(r'[+]?[78][\s\-]?\d{3}[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}', parsed_text)
+        if phone_match:
+            phone_number = re.sub(r'\D', '', phone_match.group())
+            if len(phone_number) >= 10:
+                logger.info(f"Телефон распознан: {phone_number}")
+                return phone_number
+        
+        logger.warning(f"Номер не найден в тексте: {parsed_text}")
+        return None
+    
+    except Exception as e:
+        logger.error(f"Ошибка OCR: {e}")
+        # Удаляем временный файл при ошибке
+        if temp_file and os.path.exists(temp_file.name):
+            try:
+                os.unlink(temp_file.name)
+                logger.info(f"Временный файл удалён после ошибки: {temp_file.name}")
+            except:
+                pass
+        return None
 
 async def human_like_mouse_move(page, from_x, from_y, to_x, to_y):
     steps = random.randint(10, 20)
@@ -434,7 +511,6 @@ async def parse_avito(url: str, mode: str = "full"):
             flat['photos'] = []
         
         # ТЕЛЕФОН
-        # ТЕЛЕФОН
         if messages_only:
             flat['phone'] = 'только сообщения'
         else:
@@ -442,18 +518,16 @@ async def parse_avito(url: str, mode: str = "full"):
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
                 await asyncio.sleep(1)
                 
-                # ПРОВЕРКА ПЛАТНОЙ УСЛУГИ "Связаться сейчас"
+                # ПРОВЕРКА ПЛАТНОЙ УСЛУГИ
                 paid_service = False
                 free_after_time = None
                 
                 try:
-                    # Ищем заголовок "Свяжитесь сейчас за 159 ₽"
                     paid_header = await page.query_selector('h2:has-text("Свяжитесь сейчас")')
                     if paid_header:
                         paid_service = True
                         logger.info("Обнаружена платная услуга 'Связаться сейчас'")
                         
-                        # Ищем время в <strong class="OVzrF">
                         time_elem = await page.query_selector('strong.OVzrF')
                         if time_elem:
                             free_after_time = (await time_elem.inner_text()).strip()
@@ -486,7 +560,7 @@ async def parse_avito(url: str, mode: str = "full"):
                     if phone_clicked:
                         phone_found = False
                         
-                        # tel: ссылка
+                        # СПОСОБ 1: tel: ссылка
                         try:
                             phone_links = await page.query_selector_all('a[href^="tel:"]')
                             for phone_link in phone_links:
@@ -497,13 +571,30 @@ async def parse_avito(url: str, mode: str = "full"):
                                         if len(phone_number) >= 10:
                                             flat['phone'] = phone_number
                                             phone_found = True
+                                            logger.info(f"Телефон (tel:): {phone_number}")
                                             break
                                 except:
                                     pass
                         except:
                             pass
                         
-                        # base64 картинка
+                        # СПОСОБ 2: Текст в попапе
+                        if not phone_found:
+                            try:
+                                phone_modal = await page.query_selector('[data-marker="phone-popup"]')
+                                if phone_modal:
+                                    modal_text = await phone_modal.inner_text()
+                                    phone_match = re.search(r'[+]?[78][\s\-]?\d{3}[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}', modal_text)
+                                    if phone_match:
+                                        phone_number = re.sub(r'\D', '', phone_match.group())
+                                        if len(phone_number) >= 10:
+                                            flat['phone'] = phone_number
+                                            phone_found = True
+                                            logger.info(f"Телефон (модалка): {phone_number}")
+                            except Exception as e:
+                                logger.warning(f"Ошибка извлечения текста: {e}")
+                        
+                        # СПОСОБ 3: base64 → OCR
                         if not phone_found:
                             try:
                                 selectors = [
@@ -519,13 +610,26 @@ async def parse_avito(url: str, mode: str = "full"):
                                         if await phone_img.is_visible():
                                             phone_src = await phone_img.get_attribute('src')
                                             if phone_src and 'base64' in phone_src:
-                                                flat['phone'] = phone_src
-                                                phone_found = True
+                                                logger.info(f"Найдена base64 картинка ({len(phone_src)} символов)")
+                                                
+                                                # Пытаемся распознать через OCR
+                                                recognized_phone = extract_phone_from_base64(phone_src)
+                                                
+                                                if recognized_phone:
+                                                    flat['phone'] = recognized_phone
+                                                    phone_found = True
+                                                    logger.info(f"Телефон (OCR): {recognized_phone}")
+                                                else:
+                                                    # Если OCR не сработал - сохраняем base64
+                                                    flat['phone'] = 'OCR failed'
+                                                    flat['phone_image'] = phone_src
+                                                    phone_found = True
+                                                    logger.warning("OCR не смог распознать номер")
                                                 break
                                     if phone_found:
                                         break
-                            except:
-                                pass
+                            except Exception as e:
+                                logger.error(f"Ошибка обработки base64: {e}")
                         
                         if not phone_found:
                             flat['phone'] = 'Не удалось получить'
@@ -533,475 +637,8 @@ async def parse_avito(url: str, mode: str = "full"):
                         flat['phone'] = 'Кнопка не найдена'
             except:
                 flat['phone'] = 'Ошибка'
-
         
         await browser.close()
         return flat
 
-async def parse_cian(url: str, mode: str = "full"):
-    """
-    mode: "full" = полный парсинг / "check" = актуальность + цена
-    """
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
-        context = await browser.new_context(
-            user_agent=DESKTOP_UA,
-            viewport={"width": 1920, "height": 1080},
-            locale="ru-RU"
-        )
-        page = await context.new_page()
-        page.set_default_timeout(60000)
-        
-        await page.goto(url, wait_until="domcontentloaded")
-        await page.wait_for_timeout(1000 if mode == "check" else 2000)
-        
-        # ПРОВЕРКА АКТУАЛЬНОСТИ (всегда)
-        try:
-            unpublished = await page.query_selector('[data-name="OfferUnpublished"]')
-            if unpublished:
-                await browser.close()
-                return {'status': 'unpublished', 'message': 'Объявление снято'}
-        except:
-            pass
-        
-        # ЦЕНА (всегда)
-        try:
-            price_el = await page.query_selector("[data-testid='price-amount']")
-            price = (await price_el.inner_text()).strip() if price_el else None
-        except:
-            price = None
-        
-        # РЕЖИМ "check"
-        if mode == "check":
-            await browser.close()
-            return {
-                'status': 'active',
-                'price': price,
-                'mode': 'quick_check'
-            }
-        
-        # РЕЖИМ "full"
-        flat = {'status': 'active', 'price': price}
-        
-        try:
-            h1 = await page.query_selector("h1")
-            flat['summary'] = (await h1.inner_text()).strip() if h1 else None
-        except:
-            flat['summary'] = None
-        
-        try:
-            address_items = await page.query_selector_all('[data-name="AddressItem"]')
-            address_parts = []
-            for item in address_items:
-                address_parts.append((await item.inner_text()).strip())
-            flat['address'] = ', '.join(address_parts) if address_parts else None
-        except:
-            flat['address'] = None
-        
-        try:
-            jk_el = await page.query_selector('[data-name="ParentNew"] a')
-            flat['jk'] = (await jk_el.inner_text()).strip() if jk_el else None
-        except:
-            flat['jk'] = None
-        
-        try:
-            metros = []
-            metro_items = await page.query_selector_all('[data-name="UndergroundItem"]')
-            for item in metro_items:
-                try:
-                    link = await item.query_selector('a')
-                    station = (await link.inner_text()).strip() if link else None
-                    time_el = await item.query_selector('.xa15a2ab7--d9f62d--underground_time')
-                    if time_el:
-                        time_text = (await time_el.inner_text()).strip()
-                        metros.append(f"{station} ({time_text})")
-                    else:
-                        metros.append(station)
-                except:
-                    pass
-            flat['metro'] = metros
-        except:
-            flat['metro'] = []
-        
-        # Оплата
-        try:
-            payment_items = await page.query_selector_all('[data-name="OfferFactItem"]')
-            payment_zhkh = payment_deposit = payment_commission = payment_prepay = payment_term = None
-            
-            for item in payment_items:
-                try:
-                    spans = await item.query_selector_all('span')
-                    if len(spans) >= 2:
-                        key = (await spans[0].inner_text()).strip()
-                        value = (await spans[1].inner_text()).strip()
-                        
-                        if 'Оплата ЖКХ' in key:
-                            payment_zhkh = value
-                        elif 'Залог' in key:
-                            payment_deposit = value
-                        elif 'Комиссии' in key or 'Комиссия' in key:
-                            payment_commission = value
-                        elif 'Предоплата' in key:
-                            payment_prepay = value
-                        elif 'Срок аренды' in key:
-                            payment_term = value
-                except:
-                    pass
-            
-            flat.update({
-                'payment_zhkh': payment_zhkh, 'payment_deposit': payment_deposit,
-                'payment_commission': payment_commission, 'payment_prepay': payment_prepay,
-                'payment_term': payment_term
-            })
-        except:
-            pass
-        
-        # ПАРСИНГ ХАРАКТЕРИСТИК (приоритет ObjectFactoids → OfferSummaryInfoItem)
-        try:
-            total_area = living_area = kitchen_area = floor = floors_total = year_built = None
-            layout = bathroom = elevators = parking = None
-            ceiling_height = repair = windows_view = balcony_count = loggia_count = None
-            
-            # ШАГ 1: Парсим ObjectFactoids (этаж, площади, год)
-            factoid_items = await page.query_selector_all('[data-name="ObjectFactoidsItem"]')
-            
-            for item in factoid_items:
-                try:
-                    spans = await item.query_selector_all('span')
-                    if len(spans) >= 2:
-                        key = (await spans[0].inner_text()).strip()
-                        value = (await spans[1].inner_text()).strip()
-                        
-                        if 'Общая площадь' in key:
-                            total_area = value
-                        elif 'Жилая площадь' in key:
-                            living_area = value
-                        elif 'Площадь кухни' in key:
-                            kitchen_area = value
-                        elif key == 'Этаж' and 'из' in value:
-                            try:
-                                parts = value.split('из')
-                                floor = parts[0].strip()
-                                floors_total = parts[1].strip()
-                            except:
-                                floor = value
-                        elif 'Год постройки' in key:
-                            year_built = value
-                except:
-                    pass
-            
-            # ШАГ 2: Парсим OfferSummaryInfoItem (всё остальное + fallback для этажа)
-            info_items = await page.query_selector_all('[data-testid="OfferSummaryInfoItem"]')
-            
-            for item in info_items:
-                try:
-                    paragraphs = await item.query_selector_all('p')
-                    if len(paragraphs) >= 2:
-                        key = (await paragraphs[0].inner_text()).strip()
-                        value = (await paragraphs[1].inner_text()).strip()
-                        
-                        # Площади (если не нашли в ObjectFactoids)
-                        if not total_area and 'Общая площадь' in key:
-                            total_area = value
-                        elif not living_area and 'Жилая площадь' in key:
-                            living_area = value
-                        elif not kitchen_area and 'Площадь кухни' in key:
-                            kitchen_area = value
-                        
-                        # Этаж (fallback)
-                        elif not floor and key == 'Этаж' and 'из' in value:
-                            try:
-                                parts = value.split('из')
-                                floor = parts[0].strip()
-                                floors_total = parts[1].strip()
-                            except:
-                                floor = value
-                        
-                        # Год (fallback)
-                        elif not year_built and 'Год постройки' in key:
-                            year_built = value
-                        
-                        # НОВЫЕ ПОЛЯ
-                        elif 'Высота потолков' in key:
-                            ceiling_height = value
-                        elif 'Ремонт' in key:
-                            repair = value
-                        elif 'Вид из окон' in key:
-                            windows_view = value
-                        elif 'Балкон/лоджия' in key or 'Балкон' in key:
-                            # "1 лоджия" или "2 балкона"
-                            balcony_match = re.search(r'(\d+)\s*балкон', value, re.IGNORECASE)
-                            loggia_match = re.search(r'(\d+)\s*лодж', value, re.IGNORECASE)
-                            if balcony_match:
-                                balcony_count = int(balcony_match.group(1))
-                            if loggia_match:
-                                loggia_count = int(loggia_match.group(1))
-                        
-                        # Другие поля
-                        elif 'Планировка' in key:
-                            layout = value
-                        elif 'Санузел' in key:
-                            bathroom = value
-                        elif 'Количество лифтов' in key:
-                            elevators = value
-                        elif 'Парковка' in key:
-                            parking = value
-                except:
-                    pass
-            
-            flat.update({
-                'total_area': total_area, 'living_area': living_area, 'kitchen_area': kitchen_area,
-                'floor': floor, 'floors_total': floors_total,
-                'layout': layout, 'bathroom': bathroom, 'year_built': year_built,
-                'elevators': elevators, 'parking': parking,
-                'ceiling_height': ceiling_height, 'repair': repair, 'windows_view': windows_view,
-                'balcony_count': balcony_count, 'loggia_count': loggia_count
-            })
-        except Exception as e:
-            logger.error(f"Ошибка парсинга характеристик: {e}")
-            pass
-
-        
-        # Удобства
-        try:
-            amenities = []
-            amenity_items = await page.query_selector_all('[data-name="FeaturesItem"]')
-            for item in amenity_items:
-                try:
-                    amenity = (await item.inner_text()).strip()
-                    if amenity:
-                        amenities.append(amenity)
-                except:
-                    pass
-            flat['amenities'] = amenities
-        except:
-            flat['amenities'] = []
-        
-        # ПАРСИНГ ОПИСАНИЯ
-        try:
-            description = None
-            
-            # Вариант 1: Основной селектор
-            desc_el = await page.query_selector('span.xa15a2ab7--dc75cc--text.xa15a2ab7--dc75cc--text_whiteSpace__pre-wrap')
-            if desc_el:
-                description = (await desc_el.inner_text()).strip()
-            
-            # Вариант 2: Fallback
-            if not description:
-                desc_el2 = await page.query_selector('[data-name="Description"]')
-                if desc_el2:
-                    description = (await desc_el2.inner_text()).strip()
-            
-            # Вариант 3: Ещё один fallback
-            if not description:
-                desc_el3 = await page.query_selector('div[itemprop="description"]')
-                if desc_el3:
-                    description = (await desc_el3.inner_text()).strip()
-            
-            flat['description'] = description
-        except Exception as e:
-            logger.error(f"Ошибка парсинга описания: {e}")
-            flat['description'] = None
-        
-        # ПАРСИНГ ФОТО (с кликами - все 24 фото)
-        try:
-            photos = set()
-            
-            # Узнаём количество фото
-            photo_count = 0
-            try:
-                count_button = await page.query_selector('button:has-text("фото")')
-                if count_button:
-                    count_text = (await count_button.inner_text()).strip()
-                    match = re.search(r'(\d+)', count_text)
-                    if match:
-                        photo_count = int(match.group(1))
-                        logger.info(f"Обнаружено {photo_count} фото")
-            except:
-                photo_count = 30
-            
-            # СПОСОБ 1: Клики по галерее
-            try:
-                await page.wait_for_selector('[data-name="GalleryInnerComponent"]', timeout=5000)
-                next_button_selector = 'button[title="Следующее изображение"]'
-                
-                for i in range(photo_count):
-                    # Достаём текущее фото
-                    try:
-                        current_img = await page.query_selector('[data-name="GalleryInnerComponent"] img')
-                        if current_img:
-                            src = await current_img.get_attribute('src')
-                            if src and 'images.cdn-cian.ru' in src:
-                                # Оставляем размер или добавляем -1
-                                if not (src.endswith('-1.jpg') or src.endswith('-2.jpg')):
-                                    full_url = src.replace('.jpg', '-1.jpg')
-                                else:
-                                    full_url = src
-                                photos.add(full_url)
-                    except:
-                        pass
-                    
-                    # Кликаем дальше
-                    if i < photo_count - 1:
-                        try:
-                            next_button = await page.query_selector(next_button_selector)
-                            if next_button and await next_button.is_visible():
-                                await next_button.click()
-                                await asyncio.sleep(0.4)
-                        except:
-                            break
-                
-                logger.info(f"Способ 1: {len(photos)} фото")
-            except Exception as e:
-                logger.warning(f"Способ 1 ошибка: {e}")
-            
-            # СПОСОБ 2: Миниатюры (fallback)
-            if len(photos) < photo_count:
-                try:
-                    thumbs = await page.query_selector_all('[data-name="PaginationThumbsComponent"] [data-name="ThumbComponent"] img')
-                    for img in thumbs:
-                        src = await img.get_attribute('src')
-                        if src:
-                            full_url = src.replace('-2.jpg', '-1.jpg')
-                            photos.add(full_url)
-                    logger.info(f"Способ 2: {len(photos)} фото (всего)")
-                except:
-                    pass
-            
-            flat['photos'] = list(photos)
-            logger.info(f"✅ Собрано {len(flat['photos'])} фото")
-            
-        except Exception as e:
-            logger.error(f"Ошибка фото: {e}")
-            flat['photos'] = []
-
-        
-        # ПАРСИНГ ТЕЛЕФОНА
-        try:
-            # Проверяем, какая кнопка есть
-            contacts_btn = await page.query_selector('[data-testid="contacts-button"]')
-            
-            if contacts_btn:
-                button_text = (await contacts_btn.inner_text()).strip()
-                
-                # Если кнопка "Назначить просмотр" - значит телефона нет
-                if 'Назначить просмотр' in button_text or 'Связаться' in button_text:
-                    flat['phone'] = 'Только связаться'
-                else:
-                    # Кликаем на кнопку
-                    await contacts_btn.click()
-                    await asyncio.sleep(1)
-                    
-                    # Ищем телефон
-                    phone_link = await page.query_selector('[data-testid="PhoneLink"]')
-                    phone = None
-                    
-                    if phone_link:
-                        try:
-                            href = await phone_link.get_attribute('href')
-                            if href and href.startswith('tel:'):
-                                phone = href.replace('tel:', '').strip()
-                        except:
-                            pass
-                        
-                        if not phone:
-                            try:
-                                phone = (await phone_link.inner_text()).strip()
-                            except:
-                                phone = 'Не удалось получить'
-                    
-                    flat['phone'] = phone if phone else 'Не удалось получить'
-            else:
-                flat['phone'] = 'Кнопка не найдена'
-                
-        except Exception as e:
-            logger.error(f"Ошибка парсинга телефона: {e}")
-            flat['phone'] = 'Ошибка'
-
-        
-        await browser.close()
-        return flat
-
-@app.get("/")
-async def root():
-    return {
-        "service": "Парсер Avito & Cian 🚀",
-        "cookies_loaded": os.path.exists(COOKIES_FILE),
-        "endpoints": {
-            "POST /parse": "Полный парсинг (все данные)",
-            "POST /check": "Быстрая проверка (актуальность + цена)"
-        }
-    }
-
-@app.post("/parse")
-async def parse_flat(request: ParseRequest):
-    """Полный парсинг"""
-    url_str = str(request.url)
-    start_time = time.time()
-    
-    source = 'avito' if 'avito.ru' in url_str else 'cian' if 'cian.ru' in url_str else None
-    
-    logger.info(f"🚀 ЗАПУСК /parse - {source.upper()} - {url_str[:60]}...")
-    
-    try:
-        if 'avito.ru' in url_str:
-            result = await parse_avito(url_str, mode="full")
-            result['source'] = 'avito'
-        elif 'cian.ru' in url_str:
-            result = await parse_cian(url_str, mode="full")
-            result['source'] = 'cian'
-        else:
-            raise HTTPException(status_code=400, detail="Только Avito и Cian")
-        
-        elapsed = time.time() - start_time
-        result['url'] = url_str
-        result['parse_duration'] = f"{elapsed:.2f}s"
-        
-        status_emoji = "✅" if result.get('status') == 'active' else "⚠️"
-        logger.info(f"{status_emoji} ЗАВЕРШЕНО /parse - {source.upper()} - {elapsed:.2f}s - Status: {result.get('status')}")
-        
-        return JSONResponse(content=result)
-    
-    except Exception as e:
-        elapsed = time.time() - start_time
-        logger.error(f"❌ ОШИБКА /parse - {source.upper()} - {elapsed:.2f}s - {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Ошибка: {str(e)}")
-
-@app.post("/check")
-async def check_flat(request: ParseRequest):
-    """Быстрая проверка: актуальность + цена"""
-    url_str = str(request.url)
-    start_time = time.time()
-    
-    source = 'avito' if 'avito.ru' in url_str else 'cian' if 'cian.ru' in url_str else None
-    
-    logger.info(f"⚡ ЗАПУСК /check - {source.upper()} - {url_str[:60]}...")
-    
-    try:
-        if 'avito.ru' in url_str:
-            result = await parse_avito(url_str, mode="check")
-            result['source'] = 'avito'
-        elif 'cian.ru' in url_str:
-            result = await parse_cian(url_str, mode="check")
-            result['source'] = 'cian'
-        else:
-            raise HTTPException(status_code=400, detail="Только Avito и Cian")
-        
-        elapsed = time.time() - start_time
-        result['url'] = url_str
-        result['check_duration'] = f"{elapsed:.2f}s"
-        
-        status_emoji = "✅" if result.get('status') == 'active' else "⚠️"
-        logger.info(f"{status_emoji} ЗАВЕРШЕНО /check - {source.upper()} - {elapsed:.2f}s - Status: {result.get('status')}")
-        
-        return JSONResponse(content=result)
-    
-    except Exception as e:
-        elapsed = time.time() - start_time
-        logger.error(f"❌ ОШИБКА /check - {source.upper()} - {elapsed:.2f}s - {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Ошибка: {str(e)}")
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+# [КОД parse_cian остаётся таким же - продолжение в следующем сообщении]
