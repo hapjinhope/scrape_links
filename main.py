@@ -434,6 +434,7 @@ async def parse_avito(url: str, mode: str = "full"):
             flat['photos'] = []
         
         # ТЕЛЕФОН
+        # ТЕЛЕФОН
         if messages_only:
             flat['phone'] = 'только сообщения'
         else:
@@ -441,56 +442,98 @@ async def parse_avito(url: str, mode: str = "full"):
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
                 await asyncio.sleep(1)
                 
-                phone_clicked = False
-                for selector in ['button[data-marker="item-phone-button/card"]', 'button:has-text("Показать телефон")', 'button.QaQVm']:
-                    try:
-                        phone_button = await page.query_selector(selector)
-                        if phone_button and await phone_button.is_visible():
-                            await phone_button.scroll_into_view_if_needed()
-                            await asyncio.sleep(0.5)
-                            await phone_button.click()
-                            phone_clicked = True
-                            await asyncio.sleep(3)
-                            break
-                    except:
-                        continue
+                # ПРОВЕРКА ПЛАТНОЙ УСЛУГИ "Связаться сейчас"
+                paid_service = False
+                free_after_time = None
                 
-                if phone_clicked:
-                    phone_found = False
+                try:
+                    # Ищем заголовок "Свяжитесь сейчас за 159 ₽"
+                    paid_header = await page.query_selector('h2:has-text("Свяжитесь сейчас")')
+                    if paid_header:
+                        paid_service = True
+                        logger.info("Обнаружена платная услуга 'Связаться сейчас'")
+                        
+                        # Ищем время в <strong class="OVzrF">
+                        time_elem = await page.query_selector('strong.OVzrF')
+                        if time_elem:
+                            free_after_time = (await time_elem.inner_text()).strip()
+                            logger.info(f"Бесплатно после: {free_after_time} МСК")
+                except Exception as e:
+                    logger.warning(f"Ошибка проверки платной услуги: {e}")
+                
+                if paid_service:
+                    if free_after_time:
+                        flat['phone'] = f'Платно сейчас, бесплатно после {free_after_time} МСК'
+                    else:
+                        flat['phone'] = 'Платно сейчас (новое объявление)'
+                    logger.info(f"Телефон: {flat['phone']}")
+                else:
+                    # Обычный парсинг телефона
+                    phone_clicked = False
+                    for selector in ['button[data-marker="item-phone-button/card"]', 'button:has-text("Показать телефон")', 'button.QaQVm']:
+                        try:
+                            phone_button = await page.query_selector(selector)
+                            if phone_button and await phone_button.is_visible():
+                                await phone_button.scroll_into_view_if_needed()
+                                await asyncio.sleep(0.5)
+                                await phone_button.click()
+                                phone_clicked = True
+                                await asyncio.sleep(3)
+                                break
+                        except:
+                            continue
                     
-                    try:
-                        phone_links = await page.query_selector_all('a[href^="tel:"]')
-                        for phone_link in phone_links:
+                    if phone_clicked:
+                        phone_found = False
+                        
+                        # tel: ссылка
+                        try:
+                            phone_links = await page.query_selector_all('a[href^="tel:"]')
+                            for phone_link in phone_links:
+                                try:
+                                    href = await phone_link.get_attribute('href')
+                                    if href:
+                                        phone_number = href.replace('tel:', '').replace('+', '').strip()
+                                        if len(phone_number) >= 10:
+                                            flat['phone'] = phone_number
+                                            phone_found = True
+                                            break
+                                except:
+                                    pass
+                        except:
+                            pass
+                        
+                        # base64 картинка
+                        if not phone_found:
                             try:
-                                href = await phone_link.get_attribute('href')
-                                if href:
-                                    phone_number = href.replace('tel:', '').replace('+', '').strip()
-                                    if len(phone_number) >= 10:
-                                        flat['phone'] = phone_number
-                                        phone_found = True
+                                selectors = [
+                                    'img[data-marker="phone-popup/phone-image"]',
+                                    'img.N0VY9',
+                                    '[data-marker="phone-popup"] img',
+                                    'img[src*="base64"]'
+                                ]
+                                
+                                for selector in selectors:
+                                    phone_imgs = await page.query_selector_all(selector)
+                                    for phone_img in phone_imgs:
+                                        if await phone_img.is_visible():
+                                            phone_src = await phone_img.get_attribute('src')
+                                            if phone_src and 'base64' in phone_src:
+                                                flat['phone'] = phone_src
+                                                phone_found = True
+                                                break
+                                    if phone_found:
                                         break
                             except:
                                 pass
-                    except:
-                        pass
-                    
-                    if not phone_found:
-                        try:
-                            phone_img = await page.query_selector('img[data-marker="phone-popup/phone-image"], img.N0VY9')
-                            if phone_img and await phone_img.is_visible():
-                                phone_src = await phone_img.get_attribute('src')
-                                if phone_src and 'base64' in phone_src:
-                                    flat['phone'] = phone_src
-                                    phone_found = True
-                        except:
-                            pass
-                    
-                    if not phone_found:
-                        flat['phone'] = 'Не удалось получить'
-                else:
-                    flat['phone'] = 'Кнопка не найдена'
+                        
+                        if not phone_found:
+                            flat['phone'] = 'Не удалось получить'
+                    else:
+                        flat['phone'] = 'Кнопка не найдена'
             except:
                 flat['phone'] = 'Ошибка'
+
         
         await browser.close()
         return flat

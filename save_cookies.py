@@ -1,162 +1,131 @@
 import asyncio
-import os
 from playwright.async_api import async_playwright
 
-async def save_avito_cookies():
-    """Скрипт для сбора и проверки cookies Avito (mobile версия)"""
+async def save_fresh_avito_cookies():
+    """Сбор свежих cookies для Avito с нуля"""
     
     COOKIES_FILE = "avito_session.json"
     
     async with async_playwright() as p:
         print("\n" + "="*70)
-        print("🍪 СБОР И ПРОВЕРКА COOKIES ДЛЯ AVITO (MOBILE)")
+        print("🍪 СБОР СВЕЖИХ COOKIES ДЛЯ AVITO (БЕЗ СТАРЫХ)")
         print("="*70 + "\n")
         
-        mobile_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        # Берём реальный Desktop UA
+        desktop_ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         
-        print("="*70)
-        print("📱 ЭТАП 1: СБОР COOKIES")
-        print("="*70 + "\n")
+        print("💻 Запускаю чистый браузер...")
         
         browser = await p.chromium.launch(
             headless=False,
             args=[
-                '--window-size=390,844',
-                f'--user-agent={mobile_ua}',
+                '--start-maximized',
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                f'--user-agent={desktop_ua}',
             ]
         )
         
+        # Контекст БЕЗ старых cookies
         context = await browser.new_context(
-            user_agent=mobile_ua,
-            viewport={"width": 390, "height": 844},
-            device_scale_factor=3,
-            is_mobile=True,
-            has_touch=True,
+            user_agent=desktop_ua,
+            viewport=None,  # Автоподстройка под экран
+            screen={"width": 1920, "height": 1080},
             locale="ru-RU",
             timezone_id="Europe/Moscow",
-            geolocation={"longitude": 37.6173, "latitude": 55.7558},
-            permissions=["geolocation"],
         )
+        
+        # Антидетект
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' });
+        """)
         
         page = await context.new_page()
         
-        print("📱 Браузер запущен (iPhone 14 Pro)")
-        print("\n" + "="*70)
+        print("✅ Браузер запущен (чистая сессия)\n")
+        print("="*70)
         print("📋 ЧТО ДЕЛАТЬ:")
         print("="*70)
-        print("\n1. 🔐 ЗАРЕГИСТРИРУЙСЯ или ВОЙДИ")
-        print("2. 👀 ПОСМОТРИ 5-10 объявлений (30-60 сек каждое)")
-        print("3. ⭐ ДОБАВЬ 2-3 в избранное")
-        print("4. 🔍 ПОИЩИ квартиры")
-        print("5. 📱 Походи 5-10 минут МИНИМУМ")
-        print("6. ⏸️  Нажми Enter в терминале")
-        print("\n" + "="*70 + "\n")
-        
-        print("🚀 Открываю m.avito.ru...\n")
-        await page.goto("https://m.avito.ru/")
-        
-        print("⏳ ЖДУ твоих действий...")
-        print("💡 МИНИМУМ 5-10 минут активности!\n")
-        
-        input("✅ Готово? Нажми Enter...")
-        
-        print("\n💾 Сохраняю cookies...")
-        await context.storage_state(path=COOKIES_FILE)
-        
+        print("\n🔐 1. ВОЙДИ НА АВИТО:")
+        print("   • Используй телефон/email/соцсети")
+        print("   • Подтверди СМС если попросят")
+        print("   • Убедись что авторизован (видишь своё имя)")
+        print("\n👀 2. АКТИВНОСТЬ (5-10 МИНУТ):")
+        print("   • Открой 3-5 объявлений квартир")
+        print("   • Проскролль каждое до конца")
+        print("   • Добавь 1-2 в избранное")
+        print("   • Поищи что-нибудь через поиск")
+        print("\n💡 ВАЖНО:")
+        print("   Чем больше действий - тем дольше живут cookies!")
         print("\n" + "="*70)
-        print("✅ Cookies сохранены!")
-        print("="*70)
-        
-        cookies = await context.cookies()
-        print(f"\n📊 Сохранено: {len(cookies)} cookies")
-        
-        print("\n🔑 Важные:")
-        for cookie in cookies:
-            if cookie['name'] in ['u', 'sessid', 'sx', 'v', 'luri']:
-                print(f"   ✅ {cookie['name']}: {cookie['value'][:30]}...")
-        
-        await browser.close()
-        
-        print("\n🔄 Проверяю cookies...\n")
-        await asyncio.sleep(2)
-        
-        print("="*70)
-        print("🔍 ЭТАП 2: ПРОВЕРКА")
+        print("⏸️  Нажми Enter когда готов → cookies сохранятся")
         print("="*70 + "\n")
         
-        browser2 = await p.chromium.launch(
-            headless=False,
-            args=[
-                '--window-size=390,844',
-                f'--user-agent={mobile_ua}',
-            ]
-        )
+        print("🚀 Открываю Авито...\n")
+        await page.goto("https://www.avito.ru/", wait_until="domcontentloaded")
+        await asyncio.sleep(2)
         
-        context2 = await browser2.new_context(
-            user_agent=mobile_ua,
-            viewport={"width": 390, "height": 844},
-            device_scale_factor=3,
-            is_mobile=True,
-            has_touch=True,
-            locale="ru-RU",
-            timezone_id="Europe/Moscow",
-            geolocation={"longitude": 37.6173, "latitude": 55.7558},
-            permissions=["geolocation"],
-            storage_state=COOKIES_FILE
-        )
+        print("⏳ ЖДУ твоих действий (минимум 5-10 минут)...")
+        print("⏸️  Нажми Enter когда готов...\n")
         
-        page2 = await context2.new_page()
+        try:
+            input()
+        except KeyboardInterrupt:
+            print("\n⚠️ Прервано, но cookies сохраню...")
         
-        print("✅ Браузер с КУКАМИ запущен!")
-        print("🔍 Проверяю авторизацию...\n")
+        print("\n💾 Сохраняю cookies...")
         
-        await page2.goto("https://m.avito.ru/", wait_until="domcontentloaded")
-        await asyncio.sleep(3)
+        try:
+            await context.storage_state(path=COOKIES_FILE)
+            
+            cookies = await context.cookies()
+            
+            print("\n" + "="*70)
+            print(f"✅ COOKIES СОХРАНЕНЫ: {COOKIES_FILE}")
+            print("="*70)
+            print(f"\n📊 Всего: {len(cookies)} cookies")
+            
+            # Проверяем важные
+            important = ['u', 'sessid', 'sx', 'v', 'luri', 'buyer_laas_location']
+            found = []
+            
+            print("\n🔑 Важные cookies:")
+            for cookie in cookies:
+                if cookie['name'] in important:
+                    found.append(cookie['name'])
+                    print(f"   ✅ {cookie['name']}: {cookie['value'][:40]}...")
+            
+            missing = set(important) - set(found)
+            if missing:
+                print(f"\n⚠️  Не найдено: {', '.join(missing)}")
+            else:
+                print(f"\n✅ Все важные cookies на месте!")
+            
+        except Exception as e:
+            print(f"\n❌ Ошибка сохранения: {e}")
+            await browser.close()
+            return
         
-        is_logged_in = False
-        profile_selectors = [
-            '[data-marker="header/avatar"]',
-            'a[href*="/profile"]',
-            '[data-marker="profile"]'
-        ]
-        
-        for selector in profile_selectors:
-            elem = await page2.query_selector(selector)
-            if elem:
-                is_logged_in = True
-                print(f"✅ Профиль найден: {selector}")
-                break
-        
-        login_btn = await page2.query_selector('button:has-text("Войти"), a:has-text("Войти")')
-        if login_btn:
-            is_logged_in = False
-        
-        print("\n" + "="*70)
-        if is_logged_in:
-            print("✅✅✅ УСПЕХ! АВТОРИЗАЦИЯ РАБОТАЕТ!")
-        else:
-            print("⚠️ Авторизация не подтверждена (проверь визуально)")
-        print("="*70)
-        
-        print("\n👀 Проверь визуально и нажми Enter...")
-        input()
-        
-        await browser2.close()
+        await browser.close()
         
         print("\n" + "="*70)
         print("📋 СЛЕДУЮЩИЕ ШАГИ:")
         print("="*70)
-        print("\n1. Загрузи на Railway:")
-        print("   cd ~/parser-links")
-        print("   git add avito_session.json")
-        print("   git commit -m 'Add Avito cookies'")
-        print("   git push origin main")
-        print("\n2. Railway задеплоит автоматически!")
+        print("\n1️⃣  Загрузи на Railway:")
+        print("     git add avito_session.json")
+        print("     git commit -m 'Fresh Avito cookies'")
+        print("     git push origin main")
+        print("\n2️⃣  Railway задеплоит автоматически")
+        print("\n3️⃣  Проверь парсер:")
+        print("     curl -X POST https://parser-links-production.up.railway.app/parse \\")
+        print("       -H 'Content-Type: application/json' \\")
+        print("       -d '{\"url\": \"https://www.avito.ru/...\"}' | jq")
         print("\n" + "="*70 + "\n")
 
 if __name__ == "__main__":
     try:
-        asyncio.run(save_avito_cookies())
+        asyncio.run(save_fresh_avito_cookies())
     except KeyboardInterrupt:
         print("\n⛔ Отменено")
     except Exception as e:
