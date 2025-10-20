@@ -833,32 +833,48 @@ async def parse_cian(url: str, mode: str = "full"):
             flat['photos'] = []
 
         
-        # Телефон
+        # ПАРСИНГ ТЕЛЕФОНА
         try:
+            # Проверяем, какая кнопка есть
             contacts_btn = await page.query_selector('[data-testid="contacts-button"]')
-            if contacts_btn and await contacts_btn.is_visible():
-                await contacts_btn.click()
-                await asyncio.sleep(1)
             
-            phone_link = await page.query_selector('[data-testid="PhoneLink"]')
-            phone = None
-            
-            try:
-                href = await phone_link.get_attribute('href')
-                if href and href.startswith('tel:'):
-                    phone = href.replace('tel:', '').strip()
-            except:
-                pass
-            
-            if not phone:
-                try:
-                    phone = (await phone_link.inner_text()).strip()
-                except:
-                    phone = 'Не удалось получить'
-            
-            flat['phone'] = phone
-        except:
-            flat['phone'] = 'Не удалось получить'
+            if contacts_btn:
+                button_text = (await contacts_btn.inner_text()).strip()
+                
+                # Если кнопка "Назначить просмотр" - значит телефона нет
+                if 'Назначить просмотр' in button_text or 'Связаться' in button_text:
+                    flat['phone'] = 'Только связаться'
+                else:
+                    # Кликаем на кнопку
+                    await contacts_btn.click()
+                    await asyncio.sleep(1)
+                    
+                    # Ищем телефон
+                    phone_link = await page.query_selector('[data-testid="PhoneLink"]')
+                    phone = None
+                    
+                    if phone_link:
+                        try:
+                            href = await phone_link.get_attribute('href')
+                            if href and href.startswith('tel:'):
+                                phone = href.replace('tel:', '').strip()
+                        except:
+                            pass
+                        
+                        if not phone:
+                            try:
+                                phone = (await phone_link.inner_text()).strip()
+                            except:
+                                phone = 'Не удалось получить'
+                    
+                    flat['phone'] = phone if phone else 'Не удалось получить'
+            else:
+                flat['phone'] = 'Кнопка не найдена'
+                
+        except Exception as e:
+            logger.error(f"Ошибка парсинга телефона: {e}")
+            flat['phone'] = 'Ошибка'
+
         
         await browser.close()
         return flat
