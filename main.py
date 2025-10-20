@@ -36,7 +36,7 @@ from parsers.avito_parser import parse_avito
 from parsers.cian_parser import parse_cian
 
 # Импорт настроек
-from settings.settings import PORT, HOST, COOKIES_FILE
+from config.settings import PORT, HOST, COOKIES_FILE
 
 # Импорт логгера
 from log.logger import logger
