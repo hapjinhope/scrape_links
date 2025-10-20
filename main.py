@@ -19,8 +19,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Парсер квартир Avito & Cian")
-# ... дальше твой код
-
 
 class ParseRequest(BaseModel):
     url: HttpUrl
@@ -436,6 +434,7 @@ async def parse_avito(url: str, mode: str = "full"):
             flat['photos'] = []
         
         # ТЕЛЕФОН
+        # ТЕЛЕФОН
         if messages_only:
             flat['phone'] = 'только сообщения'
         else:
@@ -448,11 +447,13 @@ async def parse_avito(url: str, mode: str = "full"):
                 free_after_time = None
                 
                 try:
+                    # Ищем заголовок "Свяжитесь сейчас за 159 ₽"
                     paid_header = await page.query_selector('h2:has-text("Свяжитесь сейчас")')
                     if paid_header:
                         paid_service = True
                         logger.info("Обнаружена платная услуга 'Связаться сейчас'")
                         
+                        # Ищем время в <strong class="OVzrF">
                         time_elem = await page.query_selector('strong.OVzrF')
                         if time_elem:
                             free_after_time = (await time_elem.inner_text()).strip()
@@ -532,6 +533,7 @@ async def parse_avito(url: str, mode: str = "full"):
                         flat['phone'] = 'Кнопка не найдена'
             except:
                 flat['phone'] = 'Ошибка'
+
         
         await browser.close()
         return flat
@@ -654,12 +656,13 @@ async def parse_cian(url: str, mode: str = "full"):
         except:
             pass
         
-        # ХАРАКТЕРИСТИКИ
+        # ПАРСИНГ ХАРАКТЕРИСТИК (приоритет ObjectFactoids → OfferSummaryInfoItem)
         try:
             total_area = living_area = kitchen_area = floor = floors_total = year_built = None
             layout = bathroom = elevators = parking = None
             ceiling_height = repair = windows_view = balcony_count = loggia_count = None
             
+            # ШАГ 1: Парсим ObjectFactoids (этаж, площади, год)
             factoid_items = await page.query_selector_all('[data-name="ObjectFactoidsItem"]')
             
             for item in factoid_items:
@@ -687,6 +690,7 @@ async def parse_cian(url: str, mode: str = "full"):
                 except:
                     pass
             
+            # ШАГ 2: Парсим OfferSummaryInfoItem (всё остальное + fallback для этажа)
             info_items = await page.query_selector_all('[data-testid="OfferSummaryInfoItem"]')
             
             for item in info_items:
@@ -696,12 +700,15 @@ async def parse_cian(url: str, mode: str = "full"):
                         key = (await paragraphs[0].inner_text()).strip()
                         value = (await paragraphs[1].inner_text()).strip()
                         
+                        # Площади (если не нашли в ObjectFactoids)
                         if not total_area and 'Общая площадь' in key:
                             total_area = value
                         elif not living_area and 'Жилая площадь' in key:
                             living_area = value
                         elif not kitchen_area and 'Площадь кухни' in key:
                             kitchen_area = value
+                        
+                        # Этаж (fallback)
                         elif not floor and key == 'Этаж' and 'из' in value:
                             try:
                                 parts = value.split('из')
@@ -709,8 +716,12 @@ async def parse_cian(url: str, mode: str = "full"):
                                 floors_total = parts[1].strip()
                             except:
                                 floor = value
+                        
+                        # Год (fallback)
                         elif not year_built and 'Год постройки' in key:
                             year_built = value
+                        
+                        # НОВЫЕ ПОЛЯ
                         elif 'Высота потолков' in key:
                             ceiling_height = value
                         elif 'Ремонт' in key:
@@ -718,12 +729,15 @@ async def parse_cian(url: str, mode: str = "full"):
                         elif 'Вид из окон' in key:
                             windows_view = value
                         elif 'Балкон/лоджия' in key or 'Балкон' in key:
+                            # "1 лоджия" или "2 балкона"
                             balcony_match = re.search(r'(\d+)\s*балкон', value, re.IGNORECASE)
                             loggia_match = re.search(r'(\d+)\s*лодж', value, re.IGNORECASE)
                             if balcony_match:
                                 balcony_count = int(balcony_match.group(1))
                             if loggia_match:
                                 loggia_count = int(loggia_match.group(1))
+                        
+                        # Другие поля
                         elif 'Планировка' in key:
                             layout = value
                         elif 'Санузел' in key:
@@ -746,6 +760,7 @@ async def parse_cian(url: str, mode: str = "full"):
         except Exception as e:
             logger.error(f"Ошибка парсинга характеристик: {e}")
             pass
+
         
         # Удобства
         try:
@@ -762,19 +777,22 @@ async def parse_cian(url: str, mode: str = "full"):
         except:
             flat['amenities'] = []
         
-        # ОПИСАНИЕ
+        # ПАРСИНГ ОПИСАНИЯ
         try:
             description = None
             
+            # Вариант 1: Основной селектор
             desc_el = await page.query_selector('span.xa15a2ab7--dc75cc--text.xa15a2ab7--dc75cc--text_whiteSpace__pre-wrap')
             if desc_el:
                 description = (await desc_el.inner_text()).strip()
             
+            # Вариант 2: Fallback
             if not description:
                 desc_el2 = await page.query_selector('[data-name="Description"]')
                 if desc_el2:
                     description = (await desc_el2.inner_text()).strip()
             
+            # Вариант 3: Ещё один fallback
             if not description:
                 desc_el3 = await page.query_selector('div[itemprop="description"]')
                 if desc_el3:
@@ -785,10 +803,11 @@ async def parse_cian(url: str, mode: str = "full"):
             logger.error(f"Ошибка парсинга описания: {e}")
             flat['description'] = None
         
-        # ФОТО
+        # ПАРСИНГ ФОТО (с кликами - все 24 фото)
         try:
             photos = set()
             
+            # Узнаём количество фото
             photo_count = 0
             try:
                 count_button = await page.query_selector('button:has-text("фото")')
@@ -801,16 +820,19 @@ async def parse_cian(url: str, mode: str = "full"):
             except:
                 photo_count = 30
             
+            # СПОСОБ 1: Клики по галерее
             try:
                 await page.wait_for_selector('[data-name="GalleryInnerComponent"]', timeout=5000)
                 next_button_selector = 'button[title="Следующее изображение"]'
                 
                 for i in range(photo_count):
+                    # Достаём текущее фото
                     try:
                         current_img = await page.query_selector('[data-name="GalleryInnerComponent"] img')
                         if current_img:
                             src = await current_img.get_attribute('src')
                             if src and 'images.cdn-cian.ru' in src:
+                                # Оставляем размер или добавляем -1
                                 if not (src.endswith('-1.jpg') or src.endswith('-2.jpg')):
                                     full_url = src.replace('.jpg', '-1.jpg')
                                 else:
@@ -819,6 +841,7 @@ async def parse_cian(url: str, mode: str = "full"):
                     except:
                         pass
                     
+                    # Кликаем дальше
                     if i < photo_count - 1:
                         try:
                             next_button = await page.query_selector(next_button_selector)
@@ -832,6 +855,7 @@ async def parse_cian(url: str, mode: str = "full"):
             except Exception as e:
                 logger.warning(f"Способ 1 ошибка: {e}")
             
+            # СПОСОБ 2: Миниатюры (fallback)
             if len(photos) < photo_count:
                 try:
                     thumbs = await page.query_selector_all('[data-name="PaginationThumbsComponent"] [data-name="ThumbComponent"] img')
@@ -850,20 +874,25 @@ async def parse_cian(url: str, mode: str = "full"):
         except Exception as e:
             logger.error(f"Ошибка фото: {e}")
             flat['photos'] = []
+
         
-        # ТЕЛЕФОН
+        # ПАРСИНГ ТЕЛЕФОНА
         try:
+            # Проверяем, какая кнопка есть
             contacts_btn = await page.query_selector('[data-testid="contacts-button"]')
             
             if contacts_btn:
                 button_text = (await contacts_btn.inner_text()).strip()
                 
+                # Если кнопка "Назначить просмотр" - значит телефона нет
                 if 'Назначить просмотр' in button_text or 'Связаться' in button_text:
                     flat['phone'] = 'Только связаться'
                 else:
+                    # Кликаем на кнопку
                     await contacts_btn.click()
                     await asyncio.sleep(1)
                     
+                    # Ищем телефон
                     phone_link = await page.query_selector('[data-testid="PhoneLink"]')
                     phone = None
                     
@@ -888,6 +917,7 @@ async def parse_cian(url: str, mode: str = "full"):
         except Exception as e:
             logger.error(f"Ошибка парсинга телефона: {e}")
             flat['phone'] = 'Ошибка'
+
         
         await browser.close()
         return flat
@@ -905,41 +935,73 @@ async def root():
 
 @app.post("/parse")
 async def parse_flat(request: ParseRequest):
-    """Полный парсинг объявления"""
+    """Полный парсинг"""
     url_str = str(request.url)
+    start_time = time.time()
+    
+    source = 'avito' if 'avito.ru' in url_str else 'cian' if 'cian.ru' in url_str else None
+    
+    logger.info(f"🚀 ЗАПУСК /parse - {source.upper()} - {url_str[:60]}...")
     
     try:
         if 'avito.ru' in url_str:
             result = await parse_avito(url_str, mode="full")
+            result['source'] = 'avito'
         elif 'cian.ru' in url_str:
             result = await parse_cian(url_str, mode="full")
+            result['source'] = 'cian'
         else:
-            raise HTTPException(status_code=400, detail="Поддерживаются только Avito и Cian")
+            raise HTTPException(status_code=400, detail="Только Avito и Cian")
+        
+        elapsed = time.time() - start_time
+        result['url'] = url_str
+        result['parse_duration'] = f"{elapsed:.2f}s"
+        
+        status_emoji = "✅" if result.get('status') == 'active' else "⚠️"
+        logger.info(f"{status_emoji} ЗАВЕРШЕНО /parse - {source.upper()} - {elapsed:.2f}s - Status: {result.get('status')}")
         
         return JSONResponse(content=result)
+    
     except Exception as e:
-        logger.error(f"Ошибка парсинга: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        elapsed = time.time() - start_time
+        logger.error(f"❌ ОШИБКА /parse - {source.upper()} - {elapsed:.2f}s - {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Ошибка: {str(e)}")
 
 @app.post("/check")
 async def check_flat(request: ParseRequest):
     """Быстрая проверка: актуальность + цена"""
     url_str = str(request.url)
+    start_time = time.time()
+    
+    source = 'avito' if 'avito.ru' in url_str else 'cian' if 'cian.ru' in url_str else None
+    
+    logger.info(f"⚡ ЗАПУСК /check - {source.upper()} - {url_str[:60]}...")
     
     try:
         if 'avito.ru' in url_str:
             result = await parse_avito(url_str, mode="check")
+            result['source'] = 'avito'
         elif 'cian.ru' in url_str:
             result = await parse_cian(url_str, mode="check")
+            result['source'] = 'cian'
         else:
-            raise HTTPException(status_code=400, detail="Поддерживаются только Avito и Cian")
+            raise HTTPException(status_code=400, detail="Только Avito и Cian")
+        
+        elapsed = time.time() - start_time
+        result['url'] = url_str
+        result['check_duration'] = f"{elapsed:.2f}s"
+        
+        status_emoji = "✅" if result.get('status') == 'active' else "⚠️"
+        logger.info(f"{status_emoji} ЗАВЕРШЕНО /check - {source.upper()} - {elapsed:.2f}s - Status: {result.get('status')}")
         
         return JSONResponse(content=result)
+    
     except Exception as e:
-        logger.error(f"Ошибка проверки: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        elapsed = time.time() - start_time
+        logger.error(f"❌ ОШИБКА /check - {source.upper()} - {elapsed:.2f}s - {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Ошибка: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.getenv("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
