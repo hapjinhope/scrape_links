@@ -96,7 +96,9 @@ async def click_continue_if_exists(page):
         return False
 
 async def parse_avito(url: str, mode: str = "full"):
-    """mode: "full" = полный парсинг / "check" = актуальность + цена"""
+    """
+    mode: "full" = полный парсинг / "check" = актуальность + цена
+    """
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -124,6 +126,7 @@ async def parse_avito(url: str, mode: str = "full"):
             "device_scale_factor": 1,
         }
         
+        # ЗАГРУЗКА COOKIES
         if os.path.exists(COOKIES_FILE):
             try:
                 with open(COOKIES_FILE, 'r') as f:
@@ -146,6 +149,7 @@ async def parse_avito(url: str, mode: str = "full"):
         page = await context.new_page()
         page.set_default_timeout(90000)
         
+        # Главная (только для full mode)
         if mode == "full":
             try:
                 await page.goto("https://www.avito.ru/", wait_until="domcontentloaded")
@@ -155,6 +159,7 @@ async def parse_avito(url: str, mode: str = "full"):
             except:
                 pass
         
+        # Объявление
         await page.goto(url, wait_until="domcontentloaded")
         await page.wait_for_timeout(1000 if mode == "check" else 3000)
         await close_modals(page)
@@ -162,15 +167,19 @@ async def parse_avito(url: str, mode: str = "full"):
         if mode == "full":
             await emulate_human_behavior(page)
         
+        # СОХРАНЕНИЕ COOKIES
         try:
             storage_state = await context.storage_state()
             new_cookies_count = len(storage_state.get('cookies', []))
+            
             with open(COOKIES_FILE, 'w') as f:
                 json.dump(storage_state, f, ensure_ascii=False, indent=2)
+            
             logger.info(f"🍪 Cookies обновлены: {new_cookies_count} шт → {COOKIES_FILE}")
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения cookies: {e}")
         
+        # ПРОВЕРКА АКТУАЛЬНОСТИ (всегда)
         try:
             unpublished = await page.query_selector('h1.EEPdn:has-text("Объявление не")')
             if unpublished:
@@ -179,6 +188,7 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             pass
         
+        # ЦЕНА (всегда)
         try:
             price_el = await page.query_selector('span[content][itemprop="price"]')
             if price_el:
@@ -192,10 +202,16 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             price = None
         
+        # РЕЖИМ "check" - только актуальность + цена
         if mode == "check":
             await browser.close()
-            return {'status': 'active', 'price': price, 'mode': 'quick_check'}
+            return {
+                'status': 'active',
+                'price': price,
+                'mode': 'quick_check'
+            }
         
+        # РЕЖИМ "full" - весь парсинг
         messages_only = False
         try:
             no_calls = await page.query_selector('button:has-text("Без звонков")')
@@ -252,6 +268,7 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             flat['seller_name'] = None
         
+        # Параметры квартиры
         try:
             params_list = await page.query_selector_all('ul.HRzg1 li.cHzV4')
             rooms_count = total_area = kitchen_area = floor = floors_total = room_type = bathroom = repair = appliances = deposit = commission = kids = pets = year_built = elevator_passenger = elevator_cargo = parking = None
@@ -315,6 +332,7 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             pass
         
+        # Параметры дома
         try:
             all_params_blocks = await page.query_selector_all('ul.HRzg1')
             house_deposit = house_commission = utilities_counters = utilities_other = None
@@ -347,6 +365,7 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             pass
         
+        # Правила
         try:
             all_params_blocks = await page.query_selector_all('ul.HRzg1')
             rules_kids = rules_pets = None
@@ -371,76 +390,50 @@ async def parse_avito(url: str, mode: str = "full"):
             flat.update({'rules_kids': rules_kids, 'rules_pets': rules_pets})
         except:
             pass
-
-        # ПАРСИНГ ФОТО (с кликами по галерее - ФИНАЛ)
+        
+        # ФОТО
         try:
             photos = set()
+            await page.evaluate("window.scrollTo(0, 200)")
+            await asyncio.sleep(1)
             
-            # Узнаём количество фото
-            photo_count = 0
-            try:
-                count_button = await page.query_selector('button:has-text("фото")')
-                if count_button:
-                    count_text = (await count_button.inner_text()).strip()
-                    match = re.search(r'(\d+)', count_text)
-                    if match:
-                        photo_count = int(match.group(1))
-                        logger.info(f"Обнаружено {photo_count} фото")
-            except:
-                photo_count = 30
-            
-            # СПОСОБ 1: Клики по галерее
-            try:
-                await page.wait_for_selector('[data-name="GalleryInnerComponent"]', timeout=5000)
-                next_button_selector = 'button[title="Следующее изображение"]'
+            carousel = await page.query_selector('ul.Jue7e')
+            if carousel:
+                total_items = len(await page.query_selector_all('ul.Jue7e li.Kg235'))
+                max_clicks = total_items if total_items > 0 else 30
+                click_count = 0
                 
-                for i in range(photo_count):
-                    # Достаём текущее фото
-                    try:
-                        current_img = await page.query_selector('[data-name="GalleryInnerComponent"] img')
-                        if current_img:
-                            src = await current_img.get_attribute('src')
-                            if src and 'images.cdn-cian.ru' in src:
-                                full_url = src.replace('-2.jpg', '.jpg').replace('-1.jpg', '.jpg')
-                                photos.add(full_url)
-                    except:
-                        pass
+                while click_count < max_clicks:
+                    gallery_photos = await page.query_selector_all('#gallery-slider img[src*="avito.st"]')
                     
-                    # Кликаем дальше (если не последнее)
-                    if i < photo_count - 1:
+                    for photo in gallery_photos:
                         try:
-                            next_button = await page.query_selector(next_button_selector)
-                            if next_button and await next_button.is_visible():
-                                await next_button.click()
-                                await asyncio.sleep(0.3)
+                            src = await photo.get_attribute('src')
+                            if src and 'avito.st' in src and 'http' in src:
+                                clean_url = src.split('?')[0]
+                                photos.add(clean_url)
                         except:
+                            pass
+                    
+                    if len(photos) >= total_items:
+                        break
+                    
+                    try:
+                        next_button = await page.query_selector('button.LJZ92.bTaFV')
+                        if next_button and await next_button.is_visible():
+                            await next_button.click()
+                            click_count += 1
+                            await asyncio.sleep(0.8)
+                        else:
                             break
-                
-                logger.info(f"Способ 1: {len(photos)} фото")
-            except Exception as e:
-                logger.warning(f"Способ 1 ошибка: {e}")
-            
-            # СПОСОБ 2: Миниатюры (fallback)
-            if len(photos) < photo_count:
-                try:
-                    thumbs = await page.query_selector_all('[data-name="PaginationThumbsComponent"] [data-name="ThumbComponent"] img')
-                    for img in thumbs:
-                        src = await img.get_attribute('src')
-                        if src:
-                            full_url = src.replace('-2.jpg', '.jpg')
-                            photos.add(full_url)
-                    logger.info(f"Способ 2: {len(photos)} фото (всего)")
-                except:
-                    pass
+                    except:
+                        break
             
             flat['photos'] = list(photos)
-            logger.info(f"✅ Собрано {len(flat['photos'])} фото")
-            
-        except Exception as e:
-            logger.error(f"Ошибка фото: {e}")
+        except:
             flat['photos'] = []
-
-
+        
+        # ТЕЛЕФОН
         if messages_only:
             flat['phone'] = 'только сообщения'
         else:
@@ -503,7 +496,9 @@ async def parse_avito(url: str, mode: str = "full"):
         return flat
 
 async def parse_cian(url: str, mode: str = "full"):
-    """mode: "full" = полный парсинг / "check" = актуальность + цена"""
+    """
+    mode: "full" = полный парсинг / "check" = актуальность + цена
+    """
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
         context = await browser.new_context(
@@ -517,6 +512,7 @@ async def parse_cian(url: str, mode: str = "full"):
         await page.goto(url, wait_until="domcontentloaded")
         await page.wait_for_timeout(1000 if mode == "check" else 2000)
         
+        # ПРОВЕРКА АКТУАЛЬНОСТИ (всегда)
         try:
             unpublished = await page.query_selector('[data-name="OfferUnpublished"]')
             if unpublished:
@@ -525,16 +521,23 @@ async def parse_cian(url: str, mode: str = "full"):
         except:
             pass
         
+        # ЦЕНА (всегда)
         try:
             price_el = await page.query_selector("[data-testid='price-amount']")
             price = (await price_el.inner_text()).strip() if price_el else None
         except:
             price = None
         
+        # РЕЖИМ "check"
         if mode == "check":
             await browser.close()
-            return {'status': 'active', 'price': price, 'mode': 'quick_check'}
+            return {
+                'status': 'active',
+                'price': price,
+                'mode': 'quick_check'
+            }
         
+        # РЕЖИМ "full"
         flat = {'status': 'active', 'price': price}
         
         try:
@@ -577,6 +580,7 @@ async def parse_cian(url: str, mode: str = "full"):
         except:
             flat['metro'] = []
         
+        # Оплата
         try:
             payment_items = await page.query_selector_all('[data-name="OfferFactItem"]')
             payment_zhkh = payment_deposit = payment_commission = payment_prepay = payment_term = None
@@ -609,41 +613,10 @@ async def parse_cian(url: str, mode: str = "full"):
         except:
             pass
         
-        # ПАРСИНГ ЭТАЖНОСТИ (приоритет ObjectFactoids, fallback на OfferSummaryInfoItem)
+        # Характеристики
         try:
-            total_area = living_area = kitchen_area = floor = floors_total = year_built = None
-            layout = bathroom = elevators = parking = None
-            
-            # Попытка 1: ObjectFactoids
-            factoid_items = await page.query_selector_all('[data-name="ObjectFactoidsItem"]')
-            
-            for item in factoid_items:
-                try:
-                    spans = await item.query_selector_all('span')
-                    if len(spans) >= 2:
-                        key = (await spans[0].inner_text()).strip()
-                        value = (await spans[1].inner_text()).strip()
-                        
-                        if 'Общая площадь' in key:
-                            total_area = value
-                        elif 'Жилая площадь' in key:
-                            living_area = value
-                        elif 'Площадь кухни' in key:
-                            kitchen_area = value
-                        elif key == 'Этаж' and 'из' in value:
-                            try:
-                                parts = value.split('из')
-                                floor = parts[0].strip()
-                                floors_total = parts[1].strip()
-                            except:
-                                floor = value
-                        elif 'Год постройки' in key:
-                            year_built = value
-                except:
-                    pass
-            
-            # Попытка 2: OfferSummaryInfoItem (если не нашли в ObjectFactoids)
             info_items = await page.query_selector_all('[data-testid="OfferSummaryInfoItem"]')
+            total_area = living_area = kitchen_area = layout = bathroom = year_built = elevators = parking = None
             
             for item in info_items:
                 try:
@@ -652,48 +625,34 @@ async def parse_cian(url: str, mode: str = "full"):
                         key = (await paragraphs[0].inner_text()).strip()
                         value = (await paragraphs[1].inner_text()).strip()
                         
-                        # Только если не было в ObjectFactoids
-                        if not total_area and 'Общая площадь' in key:
+                        if 'Общая площадь' in key:
                             total_area = value
-                        elif not living_area and 'Жилая площадь' in key:
+                        elif 'Жилая площадь' in key:
                             living_area = value
-                        elif not kitchen_area and 'Площадь кухни' in key:
+                        elif 'Площадь кухни' in key:
                             kitchen_area = value
-                        elif not floor and key == 'Этаж' and 'из' in value:
-                            try:
-                                parts = value.split('из')
-                                floor = parts[0].strip()
-                                floors_total = parts[1].strip()
-                            except:
-                                floor = value
-                        elif not year_built and 'Год постройки' in key:
-                            year_built = value
-                        # Другие поля только из OfferSummaryInfoItem
                         elif 'Планировка' in key:
                             layout = value
                         elif 'Санузел' in key:
                             bathroom = value
+                        elif 'Год постройки' in key:
+                            year_built = value
                         elif 'Количество лифтов' in key:
                             elevators = value
                         elif 'Парковка' in key:
                             parking = value
-                        elif 'Высота потолков' in key:
-                            flat['ceiling_height'] = value
-                        elif 'Ремонт' in key:
-                            flat['repair'] = value
                 except:
                     pass
             
             flat.update({
                 'total_area': total_area, 'living_area': living_area, 'kitchen_area': kitchen_area,
-                'floor': floor, 'floors_total': floors_total,
                 'layout': layout, 'bathroom': bathroom, 'year_built': year_built,
                 'elevators': elevators, 'parking': parking
             })
-        except Exception as e:
-            logger.error(f"Ошибка парсинга характеристик: {e}")
+        except:
             pass
         
+        # Удобства
         try:
             amenities = []
             amenity_items = await page.query_selector_all('[data-name="FeaturesItem"]')
@@ -707,16 +666,17 @@ async def parse_cian(url: str, mode: str = "full"):
             flat['amenities'] = amenities
         except:
             flat['amenities'] = []
-                # ПАРСИНГ ОПИСАНИЯ (ДОБАВЬ СЮДА)
+        
+        # ПАРСИНГ ОПИСАНИЯ
         try:
             description = None
             
-            # Вариант 1: Основной селектор с white-space pre-wrap
+            # Вариант 1: Основной селектор
             desc_el = await page.query_selector('span.xa15a2ab7--dc75cc--text.xa15a2ab7--dc75cc--text_whiteSpace__pre-wrap')
             if desc_el:
                 description = (await desc_el.inner_text()).strip()
             
-            # Вариант 2: Fallback на data-name="Description"
+            # Вариант 2: Fallback
             if not description:
                 desc_el2 = await page.query_selector('[data-name="Description"]')
                 if desc_el2:
@@ -732,66 +692,81 @@ async def parse_cian(url: str, mode: str = "full"):
         except Exception as e:
             logger.error(f"Ошибка парсинга описания: {e}")
             flat['description'] = None
-
-        # ПАРСИНГ ФОТО (улучшенный)
+        
+        # ПАРСИНГ ФОТО (с кликами - все 24 фото)
         try:
-            photos = []
+            photos = set()
             
-            # Вариант 1: Миниатюры (самый быстрый)
-            photo_items = await page.query_selector_all('[data-name="ThumbComponent"] img')
-            for photo in photo_items:
-                try:
-                    src = await photo.get_attribute('src')
-                    if src and 'http' in src:
-                        # Заменяем миниатюру на полный размер
-                        full_url = src.replace('_m.jpg', '.jpg').replace('_s.jpg', '.jpg')
-                        photos.append(full_url)
-                except:
-                    pass
+            # Узнаём количество фото
+            photo_count = 0
+            try:
+                count_button = await page.query_selector('button:has-text("фото")')
+                if count_button:
+                    count_text = (await count_button.inner_text()).strip()
+                    match = re.search(r'(\d+)', count_text)
+                    if match:
+                        photo_count = int(match.group(1))
+                        logger.info(f"Обнаружено {photo_count} фото")
+            except:
+                photo_count = 30
             
-            # Вариант 2: Если мало фото - достаём из галереи
-            if len(photos) < 5:
-                gallery_photos = await page.query_selector_all('[data-name="GalleryPicture"] img')
-                for photo in gallery_photos:
+            # СПОСОБ 1: Клики по галерее
+            try:
+                await page.wait_for_selector('[data-name="GalleryInnerComponent"]', timeout=5000)
+                next_button_selector = 'button[title="Следующее изображение"]'
+                
+                for i in range(photo_count):
+                    # Достаём текущее фото
                     try:
-                        src = await photo.get_attribute('src')
-                        if src and 'http' in src and src not in photos:
-                            photos.append(src)
+                        current_img = await page.query_selector('[data-name="GalleryInnerComponent"] img')
+                        if current_img:
+                            src = await current_img.get_attribute('src')
+                            if src and 'images.cdn-cian.ru' in src:
+                                # Оставляем размер или добавляем -1
+                                if not (src.endswith('-1.jpg') or src.endswith('-2.jpg')):
+                                    full_url = src.replace('.jpg', '-1.jpg')
+                                else:
+                                    full_url = src
+                                photos.add(full_url)
                     except:
                         pass
+                    
+                    # Кликаем дальше
+                    if i < photo_count - 1:
+                        try:
+                            next_button = await page.query_selector(next_button_selector)
+                            if next_button and await next_button.is_visible():
+                                await next_button.click()
+                                await asyncio.sleep(0.4)
+                        except:
+                            break
+                
+                logger.info(f"Способ 1: {len(photos)} фото")
+            except Exception as e:
+                logger.warning(f"Способ 1 ошибка: {e}")
             
-            # Вариант 3: Достаём из JSON внутри страницы
-            if len(photos) < 5:
+            # СПОСОБ 2: Миниатюры (fallback)
+            if len(photos) < photo_count:
                 try:
-                    photos_json = await page.evaluate("""
-                        () => {
-                            const scripts = Array.from(document.querySelectorAll('script'));
-                            for (const script of scripts) {
-                                const text = script.textContent;
-                                if (text.includes('fullUrl')) {
-                                    try {
-                                        const match = text.match(/"fullUrl":"([^"]+)"/g);
-                                        if (match) {
-                                            return match.map(m => m.match(/"fullUrl":"([^"]+)"/)[1]);
-                                        }
-                                    } catch {}
-                                }
-                            }
-                            return [];
-                        }
-                    """)
-                    if photos_json:
-                        photos.extend([p for p in photos_json if p not in photos])
+                    thumbs = await page.query_selector_all('[data-name="PaginationThumbsComponent"] [data-name="ThumbComponent"] img')
+                    for img in thumbs:
+                        src = await img.get_attribute('src')
+                        if src:
+                            full_url = src.replace('-2.jpg', '-1.jpg')
+                            photos.add(full_url)
+                    logger.info(f"Способ 2: {len(photos)} фото (всего)")
                 except:
                     pass
             
-            flat['photos'] = list(set(photos))  # Убираем дубликаты
-            logger.info(f"Найдено {len(flat['photos'])} фото")
+            flat['photos'] = list(photos)
+            logger.info(f"✅ Собрано {len(flat['photos'])} фото")
+            
         except Exception as e:
-            logger.error(f"Ошибка парсинга фото: {e}")
+            logger.error(f"Ошибка фото: {e}")
             flat['photos'] = []
 
         
+        # Телефон
         try:
             contacts_btn = await page.query_selector('[data-testid="contacts-button"]')
             if contacts_btn and await contacts_btn.is_visible():
