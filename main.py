@@ -9,8 +9,7 @@ import os
 import json
 import time
 import logging
-from io import BytesIO
-from PIL import Image
+import base64
 
 # Создаём глобальный reader (загружается 1 раз)
 reader = None
@@ -676,7 +675,7 @@ async def parse_avito_phone_only(url: str) -> dict:
                                 phone_src = await phone_img.get_attribute('src')
                                 if phone_src and 'base64' in phone_src:
                                     logger.info("🖼️ Найдена base64 картинка, OCR...")
-                                    phone = extract_phone_from_base64(phone_src)
+                                    phone = phone_src  # Просто возвращаем base64
                                     break
                         if phone:
                             break
