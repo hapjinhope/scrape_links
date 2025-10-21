@@ -10,6 +10,57 @@ import json
 import time
 import logging
 
+def extract_phone_from_base64(base64_string: str) -> str:
+    """
+    Извлекает телефон из base64 картинки через OCR
+    
+    Args:
+        base64_string: строка типа "image/png;base64,iVBORw0KG..."
+        
+    Returns:
+        Номер телефона или "OCR error"
+    """
+    try:
+        # Убираем префикс image/png;base64,
+        if 'base64,' in base64_string:
+            base64_data = base64_string.split('base64,')[1]
+        else:
+            base64_data = base64_string
+        
+        # Декодируем base64
+        image_data = base64.b64decode(base64_data)
+        image = Image.open(BytesIO(image_data))
+        
+        # Конвертируем в grayscale для лучшего распознавания
+        image = image.convert('L')
+        
+        # OCR с настройками для цифр
+        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789+()'
+        text = pytesseract.image_to_string(image, config=custom_config, lang='eng')
+                
+        # Очищаем от лишнего
+        text = text.strip().replace(' ', '').replace('\n', '')
+        
+        # Ищем номер телефона (10-11 цифр)
+        phone_match = re.search(r'(\d{10,11})', text)
+        if phone_match:
+            phone = phone_match.group(1)
+            logger.info(f"📞 OCR распознал телефон: {phone}")
+            return phone
+        
+        # Ищем формат +7(XXX)XXX-XX-XX
+        phone_match2 = re.search(r'\+?[78]?\(?(\d{3})\)?(\d{3})(\d{2})(\d{2})', text)
+        if phone_match2:
+            phone = ''.join(phone_match2.groups())
+            logger.info(f"📞 OCR распознал телефон (формат 2): {phone}")
+            return phone
+        
+        logger.warning(f"⚠️ OCR не нашёл телефон. Текст: {text}")
+        return f"OCR error: {text[:50]}"
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка OCR: {e}")
+        return "OCR error"
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
@@ -503,29 +554,33 @@ async def parse_avito(url: str, mode: str = "full"):
                         except:
                             pass
                         
-                        # base64 картинка
-                        if not phone_found:
-                            try:
-                                selectors = [
-                                    'img[data-marker="phone-popup/phone-image"]',
-                                    'img.N0VY9',
-                                    '[data-marker="phone-popup"] img',
-                                    'img[src*="base64"]'
-                                ]
-                                
-                                for selector in selectors:
-                                    phone_imgs = await page.query_selector_all(selector)
-                                    for phone_img in phone_imgs:
-                                        if await phone_img.is_visible():
-                                            phone_src = await phone_img.get_attribute('src')
-                                            if phone_src and 'base64' in phone_src:
-                                                flat['phone'] = phone_src
-                                                phone_found = True
-                                                break
-                                    if phone_found:
+                # base64 картинка + OCR
+                if not phone_found:
+                    try:
+                        selectors = [
+                            'img[data-marker="phone-popup/phone-image"]',
+                            'img.N0VY9',
+                            '[data-marker="phone-popup"] img',
+                            'img[src*="base64"]'
+                        ]
+                        
+                        for selector in selectors:
+                            phone_imgs = await page.query_selector_all(selector)
+                            for phone_img in phone_imgs:
+                                if await phone_img.is_visible():
+                                    phone_src = await phone_img.get_attribute('src')
+                                    if phone_src and 'base64' in phone_src:
+                                        logger.info("🖼️ Найдена base64 картинка телефона, запускаю OCR...")
+                                        # OCR распознавание
+                                        flat['phone'] = extract_phone_from_base64(phone_src)
+                                        phone_found = True
                                         break
-                            except:
-                                pass
+                            if phone_found:
+                                break
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка OCR: {e}")
+                        flat['phone'] = "OCR error"
+
                         
                         if not phone_found:
                             flat['phone'] = 'Не удалось получить'
