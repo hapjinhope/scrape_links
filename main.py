@@ -10,90 +10,95 @@ import json
 import time
 import logging
 import base64
+import easyocr
 from io import BytesIO
 from PIL import Image
-import pytesseract
+
+d# Создаём глобальный reader (загружается 1 раз)
+reader = None
+
+def get_easyocr_reader():
+    """Ленивая загрузка EasyOCR"""
+    global reader
+    if reader is None:
+        logger.info("🔧 Загружаю EasyOCR модель...")
+        reader = easyocr.Reader(['en'], gpu=False)
+        logger.info("✅ EasyOCR готов")
+    return reader
 
 def extract_phone_from_base64(base64_string: str) -> str:
     """
-    Извлекает телефон из base64 картинки через OCR (улучшенная версия)
+    Извлекает телефон через EasyOCR (нейросеть)
     
     Args:
-        base64_string: строка типа "image/png;base64,iVBORw0KG..."
+        base64_string: строка "image/png;base64,..."
         
     Returns:
-        Номер телефона или "OCR error"
+        Номер телефона или "OCR failed"
     """
     try:
-        # Убираем префикс image/png;base64,
+        # Декодируем base64
         if 'base64,' in base64_string:
             base64_data = base64_string.split('base64,')[1]
         else:
             base64_data = base64_string
         
-        # Декодируем base64
         image_data = base64.b64decode(base64_data)
         image = Image.open(BytesIO(image_data))
         
-        # Увеличиваем размер для лучшего распознавания
+        # Увеличиваем для лучшего распознавания
         width, height = image.size
-        image = image.resize((width * 3, height * 3), Image.LANCZOS)
+        image = image.resize((width * 2, height * 2), Image.LANCZOS)
         
-        # Конвертируем в grayscale
+        # Grayscale + контраст
         image = image.convert('L')
-        
-        # Увеличиваем контраст
         from PIL import ImageEnhance
         enhancer = ImageEnhance.Contrast(image)
-        image = enhancer.enhance(2.5)
+        image = enhancer.enhance(2.0)
         
-        # Бинаризация (чёрно-белое)
-        threshold = 128
-        image = image.point(lambda p: 255 if p > threshold else 0)
+        # Сохраняем во временный буфер
+        img_buffer = BytesIO()
+        image.save(img_buffer, format='PNG')
+        img_buffer.seek(0)
         
-        # OCR с разными конфигами
-        configs = [
-            r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789+() ',
-            r'--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789+() ',
-            r'--oem 3 --psm 8 -c tessedit_char_whitelist=0123456789+() ',
-        ]
+        # EasyOCR распознавание
+        ocr_reader = get_easyocr_reader()
+        results = ocr_reader.readtext(img_buffer.read())
         
-        best_phone = None
+        # Собираем весь текст
+        full_text = ' '.join([text for (bbox, text, prob) in results])
+        logger.info(f"🔍 EasyOCR распознал: {full_text}")
         
-        for config in configs:
-            try:
-                text = pytesseract.image_to_string(image, config=config, lang='eng')
-                text = text.strip().replace(' ', '').replace('\n', '').replace('O', '0').replace('o', '0')
-                
-                # Ищем 11 цифр подряд (89XXXXXXXXX)
-                phone_match = re.search(r'[78](\d{10})', text)
-                if phone_match:
-                    best_phone = phone_match.group(0)
-                    logger.info(f"📞 OCR нашёл: {best_phone}")
-                    break
-                
-                # Ищем 10 цифр (9XXXXXXXXX)
-                phone_match2 = re.search(r'9(\d{9})', text)
-                if phone_match2:
-                    best_phone = '8' + phone_match2.group(0)
-                    logger.info(f"📞 OCR нашёл (добавлена 8): {best_phone}")
-                    break
-                
-                # Любые 10-11 цифр
-                phone_match3 = re.search(r'(\d{10,11})', text)
-                if phone_match3 and not best_phone:
-                    best_phone = phone_match3.group(1)
-            except:
-                continue
+        # Очищаем текст
+        clean_text = full_text.replace(' ', '').replace('-', '').replace('(', '').replace(')', '').replace('+', '')
+        clean_text = clean_text.replace('O', '0').replace('o', '0').replace('l', '1').replace('I', '1')
         
-        if best_phone:
-            return best_phone
+        # Ищем телефон (11 цифр: 89XXXXXXXXX)
+        phone_match = re.search(r'[78](\d{10})', clean_text)
+        if phone_match:
+            phone = phone_match.group(0)
+            logger.info(f"📞 Телефон найден: {phone}")
+            return phone
         
-        logger.warning(f"⚠️ OCR не распознал телефон")
-        return "OCR failed"
+        # Ищем 10 цифр (9XXXXXXXXX)
+        phone_match2 = re.search(r'9(\d{9})', clean_text)
+        if phone_match2:
+            phone = '8' + phone_match2.group(0)
+            logger.info(f"📞 Телефон найден (добавлена 8): {phone}")
+            return phone
+        
+        # Любые 10-11 цифр
+        phone_match3 = re.search(r'(\d{10,11})', clean_text)
+        if phone_match3:
+            phone = phone_match3.group(1)
+            logger.info(f"📞 Телефон найден (fallback): {phone}")
+            return phone
+        
+        logger.warning(f"⚠️ Телефон не найден. Текст: {full_text[:100]}")
+        return f"OCR no phone: {full_text[:30]}"
         
     except Exception as e:
-        logger.error(f"❌ Ошибка OCR: {e}")
+        logger.error(f"❌ EasyOCR ошибка: {e}")
         return "OCR error"
 
 # Настройка логирования
