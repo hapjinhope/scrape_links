@@ -445,31 +445,50 @@ async def parse_avito(url: str, mode: str = "full"):
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
                 await asyncio.sleep(1)
                 
-                # ПРОВЕРКА ПЛАТНОЙ УСЛУГИ
+               # ПРОВЕРКА ПЛАТНОЙ УСЛУГИ
                 paid_service = False
                 free_after_time = None
-                
+
                 try:
-                    paid_header = await page.query_selector('h2:has-text("Свяжитесь сейчас")')
-                    if paid_header:
-                        paid_service = True
-                        logger.info("💰 Платная услуга обнаружена")
-                        
+                    # Пробуем множество селекторов для плашки
+                    paid_selectors = [
+                        'h2:has-text("Свяжитесь сейчас")',
+                        'h2:has-text("Связаться сейчас")',
+                        'h2:has-text("за 159")',
+                        'button:has-text("Перейти к оплате")',
+                        '[data-marker*="paid-contact"]',
+                        '.styles-module-wrapper-kax1E:has-text("Свяжитесь")'
+                    ]
+                    
+                    for selector in paid_selectors:
+                        paid_header = await page.query_selector(selector)
+                        if paid_header:
+                            paid_service = True
+                            logger.info(f"💰 Платная услуга найдена: {selector}")
+                            break
+                    
+                    if paid_service:
+                        # Ищем время
                         time_selectors = [
                             'strong.styles-module-root-Yaf_d',
                             'strong.OVzrF',
-                            'p:has-text("бесплатно после") strong'
+                            'strong:has-text(":")',
+                            'p:has-text("бесплатно после") strong',
+                            'p:has-text("Или бесплатно после") strong'
                         ]
                         
                         for selector in time_selectors:
                             time_elem = await page.query_selector(selector)
                             if time_elem:
-                                free_after_time = (await time_elem.inner_text()).strip()
-                                logger.info(f"⏰ Бесплатно после: {free_after_time} МСК")
-                                break
+                                time_text = (await time_elem.inner_text()).strip()
+                                # Проверяем что это время (формат XX:XX)
+                                if ':' in time_text and len(time_text) <= 6:
+                                    free_after_time = time_text
+                                    logger.info(f"⏰ Бесплатно после: {free_after_time} МСК")
+                                    break
                 except Exception as e:
                     logger.warning(f"⚠️ Ошибка проверки платной услуги: {e}")
-                
+
                 # Если платная услуга - возвращаем статус "time"
                 if paid_service:
                     await browser.close()
@@ -479,6 +498,7 @@ async def parse_avito(url: str, mode: str = "full"):
                         'free_after': free_after_time if free_after_time else 'неизвестно',
                         'url': url
                     }
+
                 
                 # Обычный парсинг телефона
                 phone_clicked = False
