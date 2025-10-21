@@ -16,7 +16,7 @@ import pytesseract
 
 def extract_phone_from_base64(base64_string: str) -> str:
     """
-    Извлекает телефон из base64 картинки через OCR
+    Извлекает телефон из base64 картинки через OCR (улучшенная версия)
     
     Args:
         base64_string: строка типа "image/png;base64,iVBORw0KG..."
@@ -35,36 +35,67 @@ def extract_phone_from_base64(base64_string: str) -> str:
         image_data = base64.b64decode(base64_data)
         image = Image.open(BytesIO(image_data))
         
-        # Конвертируем в grayscale для лучшего распознавания
+        # Увеличиваем размер для лучшего распознавания
+        width, height = image.size
+        image = image.resize((width * 3, height * 3), Image.LANCZOS)
+        
+        # Конвертируем в grayscale
         image = image.convert('L')
         
-        # OCR с настройками для цифр
-        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789+()'
-        text = pytesseract.image_to_string(image, config=custom_config, lang='eng')
+        # Увеличиваем контраст
+        from PIL import ImageEnhance
+        enhancer = ImageEnhance.Contrast(image)
+        image = enhancer.enhance(2.5)
+        
+        # Бинаризация (чёрно-белое)
+        threshold = 128
+        image = image.point(lambda p: 255 if p > threshold else 0)
+        
+        # OCR с разными конфигами
+        configs = [
+            r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789+() ',
+            r'--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789+() ',
+            r'--oem 3 --psm 8 -c tessedit_char_whitelist=0123456789+() ',
+        ]
+        
+        best_phone = None
+        
+        for config in configs:
+            try:
+                text = pytesseract.image_to_string(image, config=config, lang='eng')
+                text = text.strip().replace(' ', '').replace('\n', '').replace('O', '0').replace('o', '0')
                 
-        # Очищаем от лишнего
-        text = text.strip().replace(' ', '').replace('\n', '')
+                # Ищем 11 цифр подряд (89XXXXXXXXX)
+                phone_match = re.search(r'[78](\d{10})', text)
+                if phone_match:
+                    best_phone = phone_match.group(0)
+                    logger.info(f"📞 OCR нашёл: {best_phone}")
+                    break
+                
+                # Ищем 10 цифр (9XXXXXXXXX)
+                phone_match2 = re.search(r'9(\d{9})', text)
+                if phone_match2:
+                    best_phone = '8' + phone_match2.group(0)
+                    logger.info(f"📞 OCR нашёл (добавлена 8): {best_phone}")
+                    break
+                
+                # Любые 10-11 цифр
+                phone_match3 = re.search(r'(\d{10,11})', text)
+                if phone_match3 and not best_phone:
+                    best_phone = phone_match3.group(1)
+            except:
+                continue
         
-        # Ищем номер телефона (10-11 цифр)
-        phone_match = re.search(r'(\d{10,11})', text)
-        if phone_match:
-            phone = phone_match.group(1)
-            logger.info(f"📞 OCR распознал телефон: {phone}")
-            return phone
+        if best_phone:
+            return best_phone
         
-        # Ищем формат +7(XXX)XXX-XX-XX
-        phone_match2 = re.search(r'\+?[78]?\(?(\d{3})\)?(\d{3})(\d{2})(\d{2})', text)
-        if phone_match2:
-            phone = ''.join(phone_match2.groups())
-            logger.info(f"📞 OCR распознал телефон (формат 2): {phone}")
-            return phone
-        
-        logger.warning(f"⚠️ OCR не нашёл телефон. Текст: {text}")
-        return f"OCR error: {text[:50]}"
+        logger.warning(f"⚠️ OCR не распознал телефон")
+        return "OCR failed"
         
     except Exception as e:
         logger.error(f"❌ Ошибка OCR: {e}")
         return "OCR error"
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
