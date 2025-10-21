@@ -489,7 +489,6 @@ async def parse_avito(url: str, mode: str = "full"):
             flat['photos'] = []
         
         # ТЕЛЕФОН
-        # ТЕЛЕФОН
         if messages_only:
             flat['phone'] = 'только сообщения'
         else:
@@ -497,105 +496,249 @@ async def parse_avito(url: str, mode: str = "full"):
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
                 await asyncio.sleep(1)
                 
-                # ПРОВЕРКА ПЛАТНОЙ УСЛУГИ "Связаться сейчас"
+                # ПРОВЕРКА ПЛАТНОЙ УСЛУГИ
                 paid_service = False
                 free_after_time = None
                 
                 try:
-                    # Ищем заголовок "Свяжитесь сейчас за 159 ₽"
                     paid_header = await page.query_selector('h2:has-text("Свяжитесь сейчас")')
                     if paid_header:
                         paid_service = True
-                        logger.info("Обнаружена платная услуга 'Связаться сейчас'")
+                        logger.info("💰 Платная услуга обнаружена")
                         
-                        # Ищем время в <strong class="OVzrF">
-                        time_elem = await page.query_selector('strong.OVzrF')
-                        if time_elem:
-                            free_after_time = (await time_elem.inner_text()).strip()
-                            logger.info(f"Бесплатно после: {free_after_time} МСК")
-                except Exception as e:
-                    logger.warning(f"Ошибка проверки платной услуги: {e}")
-                
-                if paid_service:
-                    if free_after_time:
-                        flat['phone'] = f'Платно сейчас, бесплатно после {free_after_time} МСК'
-                    else:
-                        flat['phone'] = 'Платно сейчас (новое объявление)'
-                    logger.info(f"Телефон: {flat['phone']}")
-                else:
-                    # Обычный парсинг телефона
-                    phone_clicked = False
-                    for selector in ['button[data-marker="item-phone-button/card"]', 'button:has-text("Показать телефон")', 'button.QaQVm']:
-                        try:
-                            phone_button = await page.query_selector(selector)
-                            if phone_button and await phone_button.is_visible():
-                                await phone_button.scroll_into_view_if_needed()
-                                await asyncio.sleep(0.5)
-                                await phone_button.click()
-                                phone_clicked = True
-                                await asyncio.sleep(3)
-                                break
-                        except:
-                            continue
-                    
-                    if phone_clicked:
-                        phone_found = False
-                        
-                        # tel: ссылка
-                        try:
-                            phone_links = await page.query_selector_all('a[href^="tel:"]')
-                            for phone_link in phone_links:
-                                try:
-                                    href = await phone_link.get_attribute('href')
-                                    if href:
-                                        phone_number = href.replace('tel:', '').replace('+', '').strip()
-                                        if len(phone_number) >= 10:
-                                            flat['phone'] = phone_number
-                                            phone_found = True
-                                            break
-                                except:
-                                    pass
-                        except:
-                            pass
-                        
-                # base64 картинка + OCR
-                if not phone_found:
-                    try:
-                        selectors = [
-                            'img[data-marker="phone-popup/phone-image"]',
-                            'img.N0VY9',
-                            '[data-marker="phone-popup"] img',
-                            'img[src*="base64"]'
+                        time_selectors = [
+                            'strong.styles-module-root-Yaf_d',
+                            'strong.OVzrF',
+                            'p:has-text("бесплатно после") strong'
                         ]
                         
-                        for selector in selectors:
-                            phone_imgs = await page.query_selector_all(selector)
-                            for phone_img in phone_imgs:
-                                if await phone_img.is_visible():
-                                    phone_src = await phone_img.get_attribute('src')
-                                    if phone_src and 'base64' in phone_src:
-                                        logger.info("🖼️ Найдена base64 картинка телефона, запускаю OCR...")
-                                        # OCR распознавание
-                                        flat['phone'] = extract_phone_from_base64(phone_src)
-                                        phone_found = True
-                                        break
-                            if phone_found:
+                        for selector in time_selectors:
+                            time_elem = await page.query_selector(selector)
+                            if time_elem:
+                                free_after_time = (await time_elem.inner_text()).strip()
+                                logger.info(f"⏰ Бесплатно после: {free_after_time} МСК")
+                                break
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка проверки платной услуги: {e}")
+                
+                # Если платная услуга - возвращаем статус "time"
+                if paid_service:
+                    await browser.close()
+                    return {
+                        'status': 'time',
+                        'message': 'Телефон платный сейчас',
+                        'free_after': free_after_time if free_after_time else 'неизвестно',
+                        'url': url
+                    }
+                
+                # Обычный парсинг телефона
+                phone_clicked = False
+                phone_button_selectors = [
+                    'button:has-text("Показать телефон")',
+                    'button[data-marker="item-phone-button/card"]',
+                    'button.styles-module-root-uSHbU:has-text("Показать")',
+                    'button:has-text("8 958")',
+                    'button.QaQVm',
+                ]
+                
+                for selector in phone_button_selectors:
+                    try:
+                        phone_button = await page.query_selector(selector)
+                        if phone_button and await phone_button.is_visible():
+                            await phone_button.scroll_into_view_if_needed()
+                            await asyncio.sleep(0.5)
+                            
+                            box = await phone_button.bounding_box()
+                            if box:
+                                click_x = box['x'] + box['width'] / 2
+                                click_y = box['y'] + box['height'] / 2
+                                await page.mouse.click(click_x, click_y)
+                                phone_clicked = True
+                                logger.info(f"✅ Кликнул: {selector}")
+                                await asyncio.sleep(3)
                                 break
                     except Exception as e:
-                        logger.error(f"❌ Ошибка OCR: {e}")
-                        flat['phone'] = "OCR error"
-
-                        
-                        if not phone_found:
-                            flat['phone'] = 'Не удалось получить'
-                    else:
-                        flat['phone'] = 'Кнопка не найдена'
-            except:
+                        logger.warning(f"⚠️ Ошибка {selector}: {e}")
+                        continue
+                
+                if phone_clicked:
+                    phone_found = False
+                    
+                    # Способ 1: tel: ссылка
+                    try:
+                        phone_links = await page.query_selector_all('a[href^="tel:"]')
+                        for phone_link in phone_links:
+                            try:
+                                href = await phone_link.get_attribute('href')
+                                if href:
+                                    phone_number = href.replace('tel:', '').replace('+', '').strip()
+                                    if len(phone_number) >= 10:
+                                        flat['phone'] = phone_number
+                                        phone_found = True
+                                        logger.info(f"✅ Телефон (tel:): {phone_number}")
+                                        break
+                            except:
+                                pass
+                    except:
+                        pass
+                    
+                    # Способ 2: base64 + OCR
+                    if not phone_found:
+                        try:
+                            selectors = [
+                                'img[data-marker="phone-popup/phone-image"]',
+                                'img.N0VY9',
+                                '[data-marker="phone-popup"] img',
+                                'img[src*="base64"]'
+                            ]
+                            
+                            for selector in selectors:
+                                phone_imgs = await page.query_selector_all(selector)
+                                for phone_img in phone_imgs:
+                                    if await phone_img.is_visible():
+                                        phone_src = await phone_img.get_attribute('src')
+                                        if phone_src and 'base64' in phone_src:
+                                            logger.info("🖼️ OCR запущен...")
+                                            flat['phone'] = extract_phone_from_base64(phone_src)
+                                            phone_found = True
+                                            break
+                                if phone_found:
+                                    break
+                        except Exception as e:
+                            logger.error(f"❌ Ошибка OCR: {e}")
+                    
+                    if not phone_found:
+                        flat['phone'] = 'Не удалось получить'
+                else:
+                    flat['phone'] = 'Кнопка не найдена'
+            except Exception as e:
+                logger.error(f"❌ Ошибка парсинга телефона: {e}")
                 flat['phone'] = 'Ошибка'
 
-        
         await browser.close()
         return flat
+
+
+async def parse_avito_phone_only(url: str) -> dict:
+    """
+    Парсит ТОЛЬКО телефон с Avito (игнорирует платную услугу)
+    """
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                f'--user-agent={DESKTOP_UA}',
+            ],
+            timeout=90000
+        )
+        
+        context_options = {
+            "user_agent": DESKTOP_UA,
+            "viewport": {"width": 1920, "height": 1080},
+            "locale": "ru-RU",
+            "timezone_id": "Europe/Moscow",
+        }
+        
+        # Загрузка cookies
+        if os.path.exists(COOKIES_FILE):
+            try:
+                context_options["storage_state"] = COOKIES_FILE
+                logger.info("🍪 Cookies загружены")
+            except:
+                pass
+        
+        context = await browser.new_context(**context_options)
+        
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        """)
+        
+        page = await context.new_page()
+        page.set_default_timeout(90000)
+        
+        await page.goto(url, wait_until="domcontentloaded")
+        await asyncio.sleep(3)
+        await close_modals(page)
+        
+        # Скроллим к кнопке телефона
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+        await asyncio.sleep(1)
+        
+        phone = None
+        
+        # Кликаем на кнопку "Показать телефон"
+        phone_clicked = False
+        for selector in [
+            'button[data-marker="item-phone-button/card"]',
+            'button:has-text("Показать телефон")',
+            'button.QaQVm'
+        ]:
+            try:
+                phone_button = await page.query_selector(selector)
+                if phone_button and await phone_button.is_visible():
+                    await phone_button.scroll_into_view_if_needed()
+                    await asyncio.sleep(0.5)
+                    await phone_button.click()
+                    phone_clicked = True
+                    logger.info("📞 Кликнул на 'Показать телефон'")
+                    await asyncio.sleep(3)
+                    break
+            except:
+                continue
+        
+        if phone_clicked:
+            # Способ 1: tel: ссылка
+            try:
+                phone_links = await page.query_selector_all('a[href^="tel:"]')
+                for phone_link in phone_links:
+                    try:
+                        href = await phone_link.get_attribute('href')
+                        if href:
+                            phone_number = href.replace('tel:', '').replace('+', '').strip()
+                            if len(phone_number) >= 10:
+                                phone = phone_number
+                                logger.info(f"✅ Телефон (tel:): {phone}")
+                                break
+                    except:
+                        pass
+            except:
+                pass
+            
+            # Способ 2: base64 + OCR
+            if not phone:
+                try:
+                    selectors = [
+                        'img[data-marker="phone-popup/phone-image"]',
+                        'img.N0VY9',
+                        '[data-marker="phone-popup"] img',
+                        'img[src*="base64"]'
+                    ]
+                    
+                    for selector in selectors:
+                        phone_imgs = await page.query_selector_all(selector)
+                        for phone_img in phone_imgs:
+                            if await phone_img.is_visible():
+                                phone_src = await phone_img.get_attribute('src')
+                                if phone_src and 'base64' in phone_src:
+                                    logger.info("🖼️ Найдена base64 картинка, OCR...")
+                                    phone = extract_phone_from_base64(phone_src)
+                                    break
+                        if phone:
+                            break
+                except Exception as e:
+                    logger.error(f"❌ Ошибка OCR: {e}")
+        
+        await browser.close()
+        
+        return {
+            'status': 'success' if phone else 'error',
+            'phone': phone if phone else 'Не удалось получить',
+            'url': url
+        }
 
 async def parse_cian(url: str, mode: str = "full"):
     """
@@ -1059,6 +1202,27 @@ async def check_flat(request: ParseRequest):
         elapsed = time.time() - start_time
         logger.error(f"❌ ОШИБКА /check - {source.upper()} - {elapsed:.2f}s - {str(e)}")
         raise HTTPException(status_code=500, detail=f"Ошибка: {str(e)}")
+
+@app.post("/phone")
+async def get_phone_only(request: ParseRequest):
+    """
+    Получить только телефон (игнорируя платную услугу)
+    Используй когда статус = "time" и время прошло
+    """
+    url_str = str(request.url)
+    logger.info(f"📞 Запрос /phone (только телефон): {url_str}")
+    
+    try:
+        if 'avito.ru' in url_str:
+            result = await parse_avito_phone_only(url_str)
+        else:
+            raise HTTPException(status_code=400, detail="Только Avito")
+        
+        return JSONResponse(content=result)
+    except Exception as e:
+        logger.error(f"❌ Ошибка /phone: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn
