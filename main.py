@@ -9,97 +9,11 @@ import os
 import json
 import time
 import logging
-import base64
-import easyocr
 from io import BytesIO
 from PIL import Image
 
 # Создаём глобальный reader (загружается 1 раз)
 reader = None
-
-def get_easyocr_reader():
-    """Ленивая загрузка EasyOCR"""
-    global reader
-    if reader is None:
-        logger.info("🔧 Загружаю EasyOCR модель...")
-        reader = easyocr.Reader(['en'], gpu=False)
-        logger.info("✅ EasyOCR готов")
-    return reader
-
-def extract_phone_from_base64(base64_string: str) -> str:
-    """
-    Извлекает телефон через EasyOCR (нейросеть)
-    
-    Args:
-        base64_string: строка "image/png;base64,..."
-        
-    Returns:
-        Номер телефона или "OCR failed"
-    """
-    try:
-        # Декодируем base64
-        if 'base64,' in base64_string:
-            base64_data = base64_string.split('base64,')[1]
-        else:
-            base64_data = base64_string
-        
-        image_data = base64.b64decode(base64_data)
-        image = Image.open(BytesIO(image_data))
-        
-        # Увеличиваем для лучшего распознавания
-        width, height = image.size
-        image = image.resize((width * 2, height * 2), Image.LANCZOS)
-        
-        # Grayscale + контраст
-        image = image.convert('L')
-        from PIL import ImageEnhance
-        enhancer = ImageEnhance.Contrast(image)
-        image = enhancer.enhance(2.0)
-        
-        # Сохраняем во временный буфер
-        img_buffer = BytesIO()
-        image.save(img_buffer, format='PNG')
-        img_buffer.seek(0)
-        
-        # EasyOCR распознавание
-        ocr_reader = get_easyocr_reader()
-        results = ocr_reader.readtext(img_buffer.read())
-        
-        # Собираем весь текст
-        full_text = ' '.join([text for (bbox, text, prob) in results])
-        logger.info(f"🔍 EasyOCR распознал: {full_text}")
-        
-        # Очищаем текст
-        clean_text = full_text.replace(' ', '').replace('-', '').replace('(', '').replace(')', '').replace('+', '')
-        clean_text = clean_text.replace('O', '0').replace('o', '0').replace('l', '1').replace('I', '1')
-        
-        # Ищем телефон (11 цифр: 89XXXXXXXXX)
-        phone_match = re.search(r'[78](\d{10})', clean_text)
-        if phone_match:
-            phone = phone_match.group(0)
-            logger.info(f"📞 Телефон найден: {phone}")
-            return phone
-        
-        # Ищем 10 цифр (9XXXXXXXXX)
-        phone_match2 = re.search(r'9(\d{9})', clean_text)
-        if phone_match2:
-            phone = '8' + phone_match2.group(0)
-            logger.info(f"📞 Телефон найден (добавлена 8): {phone}")
-            return phone
-        
-        # Любые 10-11 цифр
-        phone_match3 = re.search(r'(\d{10,11})', clean_text)
-        if phone_match3:
-            phone = phone_match3.group(1)
-            logger.info(f"📞 Телефон найден (fallback): {phone}")
-            return phone
-        
-        logger.warning(f"⚠️ Телефон не найден. Текст: {full_text[:100]}")
-        return f"OCR no phone: {full_text[:30]}"
-        
-    except Exception as e:
-        logger.error(f"❌ EasyOCR ошибка: {e}")
-        return "OCR error"
 
 # Настройка логирования
 logging.basicConfig(
@@ -524,7 +438,7 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             flat['photos'] = []
         
-        # ТЕЛЕФОН
+# ТЕЛЕФОН
         if messages_only:
             flat['phone'] = 'только сообщения'
         else:
@@ -618,7 +532,7 @@ async def parse_avito(url: str, mode: str = "full"):
                     except:
                         pass
                     
-                    # Способ 2: base64 + OCR
+                    # Способ 2: base64 (БЕЗ OCR, просто возвращаем)
                     if not phone_found:
                         try:
                             selectors = [
@@ -634,14 +548,14 @@ async def parse_avito(url: str, mode: str = "full"):
                                     if await phone_img.is_visible():
                                         phone_src = await phone_img.get_attribute('src')
                                         if phone_src and 'base64' in phone_src:
-                                            logger.info("🖼️ OCR запущен...")
-                                            flat['phone'] = extract_phone_from_base64(phone_src)
+                                            logger.info("🖼️ Найдена base64 картинка телефона")
+                                            flat['phone'] = phone_src  # ПРОСТО ВОЗВРАЩАЕМ BASE64
                                             phone_found = True
                                             break
                                 if phone_found:
                                     break
                         except Exception as e:
-                            logger.error(f"❌ Ошибка OCR: {e}")
+                            logger.error(f"❌ Ошибка поиска base64: {e}")
                     
                     if not phone_found:
                         flat['phone'] = 'Не удалось получить'
@@ -653,6 +567,7 @@ async def parse_avito(url: str, mode: str = "full"):
 
         await browser.close()
         return flat
+
 
 
 async def parse_avito_phone_only(url: str) -> dict:
