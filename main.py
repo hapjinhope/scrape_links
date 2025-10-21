@@ -9,6 +9,10 @@ import os
 import json
 import time
 import logging
+import base64
+from io import BytesIO
+from PIL import Image
+import pytesseract
 
 def extract_phone_from_base64(base64_string: str) -> str:
     """
