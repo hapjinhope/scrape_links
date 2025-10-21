@@ -14,7 +14,7 @@ import easyocr
 from io import BytesIO
 from PIL import Image
 
-d# Создаём глобальный reader (загружается 1 раз)
+# Создаём глобальный reader (загружается 1 раз)
 reader = None
 
 def get_easyocr_reader():
