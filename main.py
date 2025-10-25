@@ -754,12 +754,38 @@ async def parse_cian(url: str, mode: str = "full"):
         
         # РЕЖИМ "full"
         flat = {'status': 'active', 'price': price}
-        
+
         try:
             h1 = await page.query_selector("h1")
             flat['summary'] = (await h1.inner_text()).strip() if h1 else None
         except:
             flat['summary'] = None
+
+        # ИЗВЛЕЧЕНИЕ КОМНАТНОСТИ ИЗ SUMMARY
+        rooms = None
+        if flat['summary']:
+            summary_lower = flat['summary'].lower()
+            
+            if 'студ' in summary_lower:
+                rooms = '0'
+            elif '1-комн' in summary_lower or 'однокомнатн' in summary_lower:
+                rooms = '1'
+            elif '2-комн' in summary_lower or 'двухкомнатн' in summary_lower:
+                rooms = '2'
+            elif '3-комн' in summary_lower or 'трёхкомнатн' in summary_lower or 'трехкомнатн' in summary_lower:
+                rooms = '3'
+            elif '4-комн' in summary_lower or 'четырёхкомнатн' in summary_lower or 'четырехкомнатн' in summary_lower:
+                rooms = '4'
+            elif '5-комн' in summary_lower or 'пятикомнатн' in summary_lower:
+                rooms = '5'
+            elif '6-комн' in summary_lower or 'шестикомнатн' in summary_lower:
+                rooms = '6'
+            elif 'своб' in summary_lower:
+                rooms = 'свободная'
+
+        flat['rooms'] = rooms
+
+
         
         try:
             address_items = await page.query_selector_all('[data-name="AddressItem"]')
