@@ -236,33 +236,31 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             flat['summary'] = None
         
-        # ====== АДРЕС ======
+        # ====== АДРЕС (ИСПРАВЛЕНО) ======
         try:
-            addr_el = await page.query_selector('span.xLPJ6')
+            addr_el = await page.query_selector('span.style__item-address__string___XzQ5MT')
             flat['address'] = (await addr_el.inner_text()).strip() if addr_el else None
         except:
             flat['address'] = None
         
-        # ====== МЕТРО ======
+        # ====== МЕТРО (ИСПРАВЛЕНО) ======
         try:
-            metro_stations = []
-            metro_items = await page.query_selector_all('span.tAdYM')
-            for metro in metro_items:
+            metros = []
+            metro_items = await page.query_selector_all('span.style__item-address-georeferences-item___XzQ5MT')
+            for item in metro_items:
                 try:
-                    spans = await metro.query_selector_all('span')
+                    spans = await item.query_selector_all('span')
                     if len(spans) >= 2:
-                        station_name = (await spans[1].inner_text()).strip()
-                        time_span = await metro.query_selector('span.LHPFZ')
+                        station = (await spans[1].inner_text()).strip()
+                        time_span = await item.query_selector('span.style__item-address-georeferences-item-interval___XzQ5MT')
                         if time_span:
                             time_text = (await time_span.inner_text()).strip()
-                            metro_info = f"{station_name} ({time_text})"
+                            metros.append(f"{station} ({time_text})")
                         else:
-                            metro_info = station_name
-                        if 'мин' not in station_name:
-                            metro_stations.append(metro_info)
+                            metros.append(station)
                 except:
                     pass
-            flat['metro'] = metro_stations
+            flat['metro'] = metros
         except:
             flat['metro'] = []
         
@@ -280,12 +278,15 @@ async def parse_avito(url: str, mode: str = "full"):
         except:
             flat['seller_name'] = None
         
-        # ====== ХАРАКТЕРИСТИКИ КВАРТИРЫ ======
+        # ====== ПАРАМЕТРЫ КВАРТИРЫ (ИСПРАВЛЕНО) ======
         try:
-            params_list = await page.query_selector_all('ul.HRzg1 li.cHzV4')
-            rooms_count = total_area = kitchen_area = floor = floors_total = room_type = None
-            bathroom = repair = appliances = deposit = commission = None
-            kids = pets = year_built = elevator_passenger = elevator_cargo = parking = None
+            params_list = await page.query_selector_all('ul.params__paramsList___XzY3MG li.params__paramsList__item___XzY3MG')
+            
+            rooms_count = total_area = kitchen_area = floor = floors_total = None
+            room_type = bathroom = repair = appliances = None
+            deposit = commission = kids = pets = year_built = None
+            elevator_passenger = elevator_cargo = parking = None
+            house_deposit = house_commission = utilities_counters = utilities_other = None
             
             for param in params_list:
                 try:
@@ -301,7 +302,7 @@ async def parse_avito(url: str, mode: str = "full"):
                             total_area = value
                         elif 'Площадь кухни' in key:
                             kitchen_area = value
-                        elif key == "Этаж" and 'из' in value:
+                        elif key == 'Этаж' and 'из' in value:
                             try:
                                 floor_parts = value.split('из')
                                 floor = floor_parts[0].strip()
@@ -316,13 +317,17 @@ async def parse_avito(url: str, mode: str = "full"):
                             repair = value
                         elif 'Техника' in key:
                             appliances = value
-                        elif 'Залог' in key:
+                        elif 'Залог' in key and not deposit:
                             deposit = value
-                        elif 'Комиссия' in key:
+                        elif 'Комиссия' in key and not commission:
                             commission = value
-                        elif 'Можно с детьми' in key:
+                        elif 'По счётчикам' in key:
+                            utilities_counters = value
+                        elif 'Другие ЖКУ' in key:
+                            utilities_other = value
+                        elif 'Можно с детьми' in key and not kids:
                             kids = value
-                        elif 'Можно с животными' in key:
+                        elif 'Можно с животными' in key and not pets:
                             pets = value
                         elif 'Год постройки' in key:
                             year_built = value
@@ -336,116 +341,56 @@ async def parse_avito(url: str, mode: str = "full"):
                     pass
             
             flat.update({
-                'rooms_count': rooms_count, 'total_area': total_area, 'kitchen_area': kitchen_area,
-                'floor': floor, 'floors_total': floors_total, 'room_type': room_type,
-                'bathroom': bathroom, 'repair': repair, 'appliances': appliances,
-                'deposit': deposit, 'commission': commission, 'kids': kids, 'pets': pets,
-                'year_built': year_built, 'elevator_passenger': elevator_passenger,
-                'elevator_cargo': elevator_cargo, 'parking': parking
+                'rooms_count': rooms_count,
+                'total_area': total_area,
+                'kitchen_area': kitchen_area,
+                'floor': floor,
+                'floors_total': floors_total,
+                'room_type': room_type,
+                'bathroom': bathroom,
+                'repair': repair,
+                'appliances': appliances,
+                'deposit': deposit,
+                'commission': commission,
+                'kids': kids,
+                'pets': pets,
+                'year_built': year_built,
+                'elevator_passenger': elevator_passenger,
+                'elevator_cargo': elevator_cargo,
+                'parking': parking,
+                'house_deposit': house_deposit,
+                'house_commission': house_commission,
+                'utilities_counters': utilities_counters,
+                'utilities_other': utilities_other
             })
-        except:
+        except Exception as e:
+            logger.error(f"❌ Ошибка парсинга параметров: {e}")
             pass
         
-        # ====== ХАРАКТЕРИСТИКИ ДОМА ======
-        try:
-            all_params_blocks = await page.query_selector_all('ul.HRzg1')
-            house_deposit = house_commission = utilities_counters = utilities_other = None
-            
-            if len(all_params_blocks) >= 2:
-                house_list = await all_params_blocks[1].query_selector_all('li.cHzV4')
-                for param in house_list:
-                    try:
-                        text = (await param.inner_text()).strip()
-                        if ':' in text:
-                            parts = text.split(':', 1)
-                            key = parts[0].strip()
-                            value = parts[1].strip()
-                            
-                            if 'Залог' in key:
-                                house_deposit = value
-                            elif 'Комиссия' in key:
-                                house_commission = value
-                            elif 'По счетчикам' in key:
-                                utilities_counters = value
-                            elif 'Другие ЖКУ' in key:
-                                utilities_other = value
-                    except:
-                        pass
-            
-            flat.update({
-                'house_deposit': house_deposit, 'house_commission': house_commission,
-                'utilities_counters': utilities_counters, 'utilities_other': utilities_other
-            })
-        except:
-            pass
-        
-        # ====== ПРАВИЛА ======
-        try:
-            all_params_blocks = await page.query_selector_all('ul.HRzg1')
-            rules_kids = rules_pets = None
-            
-            if len(all_params_blocks) >= 3:
-                rules_list = await all_params_blocks[2].query_selector_all('li.cHzV4')
-                for rule in rules_list:
-                    try:
-                        text = (await rule.inner_text()).strip()
-                        if ':' in text:
-                            parts = text.split(':', 1)
-                            key = parts[0].strip()
-                            value = parts[1].strip()
-                            
-                            if 'Можно с детьми' in key:
-                                rules_kids = value
-                            elif 'Можно с животными' in key:
-                                rules_pets = value
-                    except:
-                        pass
-            
-            flat.update({'rules_kids': rules_kids, 'rules_pets': rules_pets})
-        except:
-            pass
-        
-        # ====== ФОТО ======
+        # ====== ФОТО (ИСПРАВЛЕНО) ======
         try:
             photos = set()
-            await page.evaluate("window.scrollTo(0, 200)")
-            await asyncio.sleep(1)
             
-            carousel = await page.query_selector('ul.Jue7e')
-            if carousel:
-                total_items = len(await page.query_selector_all('ul.Jue7e li.Kg235'))
-                max_clicks = total_items if total_items > 0 else 30
-                click_count = 0
-                
-                while click_count < max_clicks:
-                    gallery_photos = await page.query_selector_all('#gallery-slider img[src*="avito.st"]')
-                    
-                    for photo in gallery_photos:
-                        try:
-                            src = await photo.get_attribute('src')
-                            if src and 'avito.st' in src and 'http' in src:
-                                clean_url = src.split('?')[0]
-                                photos.add(clean_url)
-                        except:
-                            pass
-                    
-                    if len(photos) >= total_items:
-                        break
-                    
-                    try:
-                        next_button = await page.query_selector('button.LJZ92.bTaFV')
-                        if next_button and await next_button.is_visible():
-                            await next_button.click()
-                            click_count += 1
-                            await asyncio.sleep(0.8)
-                        else:
-                            break
-                    except:
-                        break
+            photo_items = await page.query_selector_all('li.images-preview__previewImageWrapper___XzJiNj img')
+            
+            for photo_el in photo_items:
+                try:
+                    src = await photo_el.get_attribute('srcset')
+                    if src:
+                        first_url = src.split(' ')[0]
+                        if first_url.startswith('http'):
+                            photos.add(first_url)
+                    else:
+                        src = await photo_el.get_attribute('src')
+                        if src and src.startswith('http'):
+                            photos.add(src)
+                except:
+                    pass
             
             flat['photos'] = list(photos)
             logger.info(f"📸 Собрано {len(flat['photos'])} фото")
-        except:
+        except Exception as e:
+            logger.error(f"❌ Ошибка парсинга фото: {e}")
             flat['photos'] = []
         
         # ====== ТЕЛЕФОН ======
