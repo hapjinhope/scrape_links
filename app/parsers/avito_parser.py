@@ -184,14 +184,45 @@ async def parse_avito(url: str, mode: str = "full"):
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения cookies: {e}")
         
-        # ====== ПРОВЕРКА АКТУАЛЬНОСТИ (всегда) ======
+                # ====== ПРОВЕРКА АКТУАЛЬНОСТИ (всегда) ======
         try:
-            unpublished = await page.query_selector('h1.EEPdn:has-text("Объявление не")')
-            if unpublished:
+            # Проверка 1: "Объявление не посмотреть"
+            unpublished_h1 = await page.query_selector('h1:has-text("Объявление не")')
+            if unpublished_h1:
+                text = (await unpublished_h1.inner_text()).strip()
+                if "Объявление не" in text:
+                    await browser.close()
+                    return {
+                        'status': 'unpublished',
+                        'message': 'Объявление не активно',
+                        'url': url
+                    }
+            
+            # Проверка 2: "Объявление закрыто"
+            closed_p = await page.query_selector('p:has-text("Объявление закрыто")')
+            if closed_p:
                 await browser.close()
-                return {'status': 'unpublished', 'message': 'Объявление снято'}
-        except:
+                return {
+                    'status': 'closed',
+                    'message': 'Объявление закрыто',
+                    'url': url
+                }
+            
+            # Проверка 3: Общая проверка на сообщение об ошибке
+            error_msg = await page.query_selector('h1.EEPdn')
+            if error_msg:
+                msg_text = (await error_msg.inner_text()).strip()
+                if any(word in msg_text for word in ['не', 'закрыто', 'удалено', 'снято']):
+                    await browser.close()
+                    return {
+                        'status': 'unavailable',
+                        'message': msg_text,
+                        'url': url
+                    }
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка проверки актуальности: {e}")
             pass
+
         
         # ====== ЦЕНА (всегда) ======
         try:
