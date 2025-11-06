@@ -311,21 +311,31 @@ async def parse_avito(url: str, mode: str = "full"):
         
         # ====== ПАРАМЕТРЫ КВАРТИРЫ (ИСПРАВЛЕНО) ======
         try:
-            params_list = await page.query_selector_all('ul.params__paramsList___XzY3MG li.params__paramsList__item___XzY3MG')
+            params_items = []
+            params_containers = await page.query_selector_all('[data-marker="item-view/item-params"]')
+            for container in params_containers:
+                try:
+                    params_in_container = await container.query_selector_all('li')
+                    params_items.extend(params_in_container)
+                except:
+                    continue
+            if not params_items:
+                params_items = await page.query_selector_all('ul.params__paramsList___XzY3MG li.params__paramsList__item___XzY3MG')
             
             rooms_count = total_area = kitchen_area = floor = floors_total = None
             room_type = bathroom = repair = appliances = None
             deposit = commission = kids = pets = year_built = None
             elevator_passenger = elevator_cargo = parking = None
             house_deposit = house_commission = utilities_counters = utilities_other = None
+            living_area = balcony = additional = furniture = ceiling_height = None
             
-            for param in params_list:
+            for param in params_items:
                 try:
                     text = (await param.inner_text()).strip()
                     if ':' in text:
                         parts = text.split(':', 1)
                         key = parts[0].strip()
-                        value = parts[1].strip()
+                        value = parts[1].strip().replace('\xa0', ' ')
                         
                         if 'Количество комнат' in key:
                             rooms_count = value
@@ -362,12 +372,22 @@ async def parse_avito(url: str, mode: str = "full"):
                             pets = value
                         elif 'Год постройки' in key:
                             year_built = value
+                        elif 'Жилая площадь' in key:
+                            living_area = value
+                        elif 'Балкон' in key or 'лоджия' in key:
+                            balcony = value
+                        elif 'Дополнительно' in key:
+                            additional = value
+                        elif 'Мебель' in key:
+                            furniture = value
                         elif 'Пассажирский лифт' in key:
                             elevator_passenger = value
                         elif 'Грузовой лифт' in key:
                             elevator_cargo = value
                         elif 'Парковка' in key:
                             parking = value
+                        elif 'Высота потолков' in key:
+                            ceiling_height = value
                 except:
                     pass
             
@@ -386,6 +406,11 @@ async def parse_avito(url: str, mode: str = "full"):
                 'kids': kids,
                 'pets': pets,
                 'year_built': year_built,
+                'living_area': living_area,
+                'balcony': balcony,
+                'additional_features': additional,
+                'furniture': furniture,
+                'ceiling_height': ceiling_height,
                 'elevator_passenger': elevator_passenger,
                 'elevator_cargo': elevator_cargo,
                 'parking': parking,
