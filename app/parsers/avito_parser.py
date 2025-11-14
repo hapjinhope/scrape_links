@@ -6,6 +6,9 @@ import os
 import json
 import logging
 import base64
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+from dotenv import load_dotenv
 
 # ============ ЛОГИРОВАНИЕ ============
 logging.basicConfig(
@@ -16,10 +19,40 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============ КОНСТАНТЫ ============
+load_dotenv()
 COOKIES_FILE = "avito_session.json"
 DESKTOP_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+DEFAULT_TELEGRAM_LOG_BOT_TOKEN = "8216085259:AAEpgRsYRYB4mKGGx5bJpQ7ICRb_W9BhUpY"
+DEFAULT_TELEGRAM_LOG_CHAT_ID = "-1003405018295"
+DEFAULT_TELEGRAM_LOG_TOPIC_ID = "217"
+TELEGRAM_LOG_BOT_TOKEN = os.getenv("TELEGRAM_LOG_BOT_TOKEN", DEFAULT_TELEGRAM_LOG_BOT_TOKEN)
+TELEGRAM_LOG_CHAT_ID = os.getenv("TELEGRAM_LOG_CHAT_ID", DEFAULT_TELEGRAM_LOG_CHAT_ID)
+TELEGRAM_LOG_TOPIC_ID = os.getenv("TELEGRAM_LOG_TOPIC_ID", DEFAULT_TELEGRAM_LOG_TOPIC_ID)
 
 # ============ УТИЛИТЫ ============
+
+def _send_telegram_message_sync(message: str):
+    if not TELEGRAM_LOG_BOT_TOKEN or not TELEGRAM_LOG_CHAT_ID:
+        return
+    payload = {
+        "chat_id": TELEGRAM_LOG_CHAT_ID,
+        "text": message,
+        "disable_web_page_preview": True
+    }
+    if TELEGRAM_LOG_TOPIC_ID:
+        payload["message_thread_id"] = TELEGRAM_LOG_TOPIC_ID
+    data = urlencode(payload).encode()
+    url = f"https://api.telegram.org/bot{TELEGRAM_LOG_BOT_TOKEN}/sendMessage"
+    req = Request(url, data=data, method="POST")
+    with urlopen(req, timeout=10) as resp:
+        resp.read()
+
+async def notify_telegram(message: str):
+    """Отправляет лог в Telegram без блокировки основного потока"""
+    try:
+        await asyncio.to_thread(_send_telegram_message_sync, message)
+    except Exception as e:
+        logger.warning(f"⚠️ Ошибка отправки лога в Telegram: {e}")
 
 async def human_like_mouse_move(page, from_x, from_y, to_x, to_y):
     """Имитирует естественное движение мыши"""
@@ -96,6 +129,36 @@ async def click_continue_if_exists(page):
     except:
         return False
 
+async def log_firewall_block_if_needed(page, url: str):
+    """Логирует ситуацию, когда Avito возвращает firewall-страницу"""
+    try:
+        firewall_container = await page.query_selector('.firewall-container')
+        firewall_title = await page.query_selector('h2:has-text("Доступ ограничен")')
+        if firewall_container or firewall_title:
+            snippet = ""
+            if firewall_container:
+                snippet = (await firewall_container.inner_text())
+                snippet = re.sub(r'\s+', ' ', snippet).strip()
+            logger.error(f"🧱 Avito заблокировал доступ по IP для {url}. Фрагмент: {snippet[:200]}")
+            return True
+    except Exception as e:
+        logger.debug(f"Не удалось проверить firewall-блок: {e}")
+    return False
+
+async def log_auth_required_if_needed(page, url: str):
+    """Проверяет, требует ли Avito авторизации, и логирует/уведомляет"""
+    try:
+        login_link = await page.query_selector('a[data-marker="header/login-button"]')
+        if login_link:
+            login_text = (await login_link.inner_text() or "").strip()
+            message = f"🔐 Avito требует авторизацию перед парсингом: {url} ({login_text})"
+            logger.warning(message)
+            await notify_telegram(message)
+            return True
+    except Exception as e:
+        logger.debug(f"Не удалось проверить необходимость авторизации: {e}")
+    return False
+
 # ============ ГЛАВНЫЕ ФУНКЦИИ ============
 
 async def parse_avito(url: str, mode: str = "full"):
@@ -168,6 +231,8 @@ async def parse_avito(url: str, mode: str = "full"):
         await page.goto(url, wait_until="domcontentloaded")
         await page.wait_for_timeout(1000 if mode == "check" else 3000)
         await close_modals(page)
+        await log_firewall_block_if_needed(page, url)
+        await log_auth_required_if_needed(page, url)
         
         if mode == "full":
             await emulate_human_behavior(page)

@@ -4,7 +4,8 @@ from pydantic import BaseModel, HttpUrl
 import time
 import logging
 import os
-from app.parsers.avito_parser import parse_avito, parse_avito_phone_only
+from dotenv import load_dotenv
+from app.parsers.avito_parser import parse_avito, parse_avito_phone_only, notify_telegram
 from app.parsers.cian_parser import parse_cian
 
 # ============ ЛОГИРОВАНИЕ ============
@@ -20,9 +21,23 @@ class ParseRequest(BaseModel):
     url: HttpUrl
 
 # ============ ПРИЛОЖЕНИЕ ============
+load_dotenv()
 app = FastAPI(title="Парсер квартир Avito & Cian 🏠")
 
 # ============ ENDPOINTS ============
+
+async def log_error_to_telegram(endpoint: str, url: str, error: Exception, source: str | None):
+    """Отправляет информацию об ошибке в Telegram"""
+    try:
+        message = (
+            f"❌ Ошибка {endpoint} "
+            f"[{source.upper() if source else 'unknown'}]\n"
+            f"URL: {url}\n"
+            f"{str(error)}"
+        )
+        await notify_telegram(message)
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось отправить сообщение об ошибке в Telegram: {e}")
 
 @app.get("/")
 async def root():
@@ -70,6 +85,7 @@ async def parse_flat(request: ParseRequest):
     except Exception as e:
         elapsed = time.time() - start_time
         logger.error(f"❌ ОШИБКА /parse - {source.upper()} - {elapsed:.2f}s - {str(e)}")
+        await log_error_to_telegram("/parse", url_str, e, source)
         raise HTTPException(status_code=500, detail=f"Ошибка: {str(e)}")
 
 @app.post("/check")
@@ -104,6 +120,7 @@ async def check_flat(request: ParseRequest):
     except Exception as e:
         elapsed = time.time() - start_time
         logger.error(f"❌ ОШИБКА /check - {source.upper()} - {elapsed:.2f}s - {str(e)}")
+        await log_error_to_telegram("/check", url_str, e, source)
         raise HTTPException(status_code=500, detail=f"Ошибка: {str(e)}")
 
 @app.post("/phone")
@@ -123,6 +140,7 @@ async def get_phone_only(request: ParseRequest):
     
     except Exception as e:
         logger.error(f"❌ ОШИБКА /phone: {e}")
+        await log_error_to_telegram("/phone", url_str, e, 'avito')
         raise HTTPException(status_code=500, detail=str(e))
 
 # ============ ЗАПУСК ============
