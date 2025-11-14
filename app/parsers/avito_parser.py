@@ -6,6 +6,7 @@ import os
 import json
 import logging
 import base64
+from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from dotenv import load_dotenv
@@ -20,7 +21,8 @@ logger = logging.getLogger(__name__)
 
 # ============ КОНСТАНТЫ ============
 load_dotenv()
-COOKIES_FILE = "avito_session.json"
+BASE_DIR = Path(__file__).resolve().parents[2]
+COOKIES_FILE = str(BASE_DIR / "avito_session.json")
 DESKTOP_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 DEFAULT_TELEGRAM_LOG_BOT_TOKEN = "8216085259:AAEpgRsYRYB4mKGGx5bJpQ7ICRb_W9BhUpY"
 DEFAULT_TELEGRAM_LOG_CHAT_ID = "-1003405018295"
