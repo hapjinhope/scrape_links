@@ -133,6 +133,7 @@ async def click_continue_if_exists(page):
 
 async def log_firewall_block_if_needed(page, url: str):
     """Логирует ситуацию, когда Avito возвращает firewall-страницу"""
+    # Проверяем наличие типового HTML-блока с сообщением «Доступ ограничен»
     try:
         firewall_container = await page.query_selector('.firewall-container')
         firewall_title = await page.query_selector('h2:has-text("Доступ ограничен")')
@@ -141,7 +142,9 @@ async def log_firewall_block_if_needed(page, url: str):
             if firewall_container:
                 snippet = (await firewall_container.inner_text())
                 snippet = re.sub(r'\s+', ' ', snippet).strip()
-            logger.error(f"🧱 Avito заблокировал доступ по IP для {url}. Фрагмент: {snippet[:200]}")
+            message = f"🧱 Avito заблокировал доступ по IP для {url}. Фрагмент: {snippet[:200]}"
+            logger.error(message)
+            await notify_telegram(message)
             return True
     except Exception as e:
         logger.debug(f"Не удалось проверить firewall-блок: {e}")
@@ -326,11 +329,16 @@ async def parse_avito(url: str, mode: str = "full"):
             pass
         
         flat = {'status': 'active', 'messages_only': messages_only, 'price': price}
+        is_free_layout = False
         
         # ====== ЗАГОЛОВОК (summary) ======
         try:
-            title_el = await page.query_selector('h1[itemprop="name"]')
+            title_el = await page.query_selector('div[data-name="MainNewTitle"] h1')
+            if not title_el:
+                title_el = await page.query_selector('h1[itemprop="name"]')
             flat['summary'] = (await title_el.inner_text()).strip() if title_el else None
+            if flat['summary'] and 'свободной планиров' in flat['summary'].lower():
+                is_free_layout = True
         except:
             flat['summary'] = None
         
@@ -457,6 +465,12 @@ async def parse_avito(url: str, mode: str = "full"):
                             ceiling_height = value
                 except:
                     pass
+            
+            if is_free_layout:
+                rooms_count = "6"
+            
+            if is_free_layout_title:
+                rooms_count = "6"
             
             flat.update({
                 'rooms_count': rooms_count,
