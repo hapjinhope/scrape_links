@@ -150,6 +150,27 @@ async def log_firewall_block_if_needed(page, url: str):
         logger.debug(f"Не удалось проверить firewall-блок: {e}")
     return False
 
+
+def has_many_rooms_indicator(text: str) -> bool:
+    """Проверяет, говорит ли текст о 5+ комнатах"""
+    if not text:
+        return False
+    normalized = text.replace('\xa0', ' ').lower()
+    if 'многокомнатн' in normalized:
+        return True
+    if any(word in normalized for word in ['пятикомнат', 'шестикомнат', 'семикомнат', 'семикомнатн']):
+        return True
+    match = re.search(r'(\d+)', normalized)
+    if match:
+        try:
+            if int(match.group(1)) >= 5:
+                return True
+        except ValueError:
+            pass
+    if '5 и более' in normalized or 'более 5' in normalized or '5+' in normalized:
+        return True
+    return False
+
 async def log_auth_required_if_needed(page, url: str):
     """Проверяет, требует ли Avito авторизации, и логирует/уведомляет"""
     try:
@@ -329,7 +350,7 @@ async def parse_avito(url: str, mode: str = "full"):
             pass
         
         flat = {'status': 'active', 'messages_only': messages_only, 'price': price}
-        is_free_layout = False
+        force_rooms_six_from_title = False
         
         # ====== ЗАГОЛОВОК (summary) ======
         try:
@@ -337,8 +358,9 @@ async def parse_avito(url: str, mode: str = "full"):
             if not title_el:
                 title_el = await page.query_selector('h1[itemprop="name"]')
             flat['summary'] = (await title_el.inner_text()).strip() if title_el else None
-            if flat['summary'] and 'свободной планиров' in flat['summary'].lower():
-                is_free_layout = True
+            summary_lower = flat['summary'].lower() if flat['summary'] else ""
+            if summary_lower and has_many_rooms_indicator(summary_lower):
+                force_rooms_six_from_title = True
         except:
             flat['summary'] = None
         
@@ -466,10 +488,9 @@ async def parse_avito(url: str, mode: str = "full"):
                 except:
                     pass
             
-            if is_free_layout:
+            if rooms_count and has_many_rooms_indicator(rooms_count):
                 rooms_count = "6"
-            
-            if is_free_layout_title:
+            elif force_rooms_six_from_title:
                 rooms_count = "6"
             
             flat.update({

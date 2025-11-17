@@ -86,7 +86,7 @@ async def parse_cian(url: str, mode: str = "full"):
             elif '6-комн' in summary_lower or 'шестикомнатн' in summary_lower:
                 rooms = '6'
             elif 'своб' in summary_lower:
-                rooms = '6'
+                rooms = '7'
 
         flat['rooms'] = rooms
 
