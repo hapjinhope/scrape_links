@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 from app.db_cookies import (
     fetch_cookie_record,
     mark_blocked,
-    mark_parsed,
 )
 
 # ============ ЛОГИРОВАНИЕ ============

@@ -23,10 +23,8 @@ class AvitoCookieRecord:
     id: Optional[Any]
     storage_state: Dict[str, Any]
     blocked: bool
-    parsed_value: Any
     cookie_column: str = "cookies"
     blocked_column: str = "blocked"
-    parsed_column: str = "parsed"
     id_column: str = "id"
 
 
@@ -92,67 +90,52 @@ async def fetch_cookie_record() -> AvitoCookieRecord:
         row.get("cookies") or row.get("storage_state") or row.get("data")
     )
     blocked = bool(row.get("blocked", False))
-    parsed_value = row.get("parsed")
     record_id = row.get("id") or row.get("cookie_id") or row.get("pk")
 
     return AvitoCookieRecord(
         id=record_id,
         storage_state=storage_state,
         blocked=blocked,
-        parsed_value=parsed_value,
     )
 
 
-async def mark_blocked(record: AvitoCookieRecord, parsed_value: Optional[str] = None) -> None:
-    """Помечает запись как заблокированную и parsed=kd (или своё)."""
+async def mark_blocked(record: AvitoCookieRecord) -> None:
+    """Помечает запись как заблокированную (blocked=true)."""
     _require_supabase()
     if not record.id:
         return
     payload = {"blocked": True}
-    if parsed_value:
-        payload["parsed"] = parsed_value
 
     def _patch():
+        params = {
+            "id": f"eq.{record.id}",
+            **({"name": f"eq.{COOKIES_NAME}"} if COOKIES_NAME else {}),
+        }
         resp = requests.patch(
-            _table_url(),
-            headers=_headers(),
-            params={
-                "id": f"eq.{record.id}",
-                **({"name": f"eq.{COOKIES_NAME}"} if COOKIES_NAME else {}),
-            },
-            json=payload,
-            timeout=10,
+            _table_url(), headers=_headers(), params=params, json=payload, timeout=10
         )
         try:
             resp.raise_for_status()
         except Exception as e:
+            # Если нет столбца parsed — пробуем без него
+            if "parsed" in resp.text:
+                payload_fallback = {"blocked": True}
+                resp2 = requests.patch(
+                    _table_url(),
+                    headers=_headers(),
+                    params=params,
+                    json=payload_fallback,
+                    timeout=10,
+                )
+                try:
+                    resp2.raise_for_status()
+                    logger.warning("⚠️ parsed column missing, updated blocked only")
+                    return
+                except Exception as e2:
+                    logger.warning(
+                        "⚠️ mark_blocked fallback failed: %s - %s", e2, resp2.text
+                    )
             logger.warning("⚠️ mark_blocked failed: %s - %s", e, resp.text)
-            raise
-
-    await asyncio.to_thread(_patch)
-
-
-async def mark_parsed(record: AvitoCookieRecord, parsed_value: str) -> None:
-    """Отмечает parsed, если запись найдена."""
-    _require_supabase()
-    if not record.id:
-        return
-
-    def _patch():
-        resp = requests.patch(
-            _table_url(),
-            headers=_headers(),
-            params={
-                "id": f"eq.{record.id}",
-                **({"name": f"eq.{COOKIES_NAME}"} if COOKIES_NAME else {}),
-            },
-            json={"parsed": parsed_value},
-            timeout=10,
-        )
-        try:
-            resp.raise_for_status()
-        except Exception as e:
-            logger.warning("⚠️ mark_parsed failed: %s - %s", e, resp.text)
             raise
 
     await asyncio.to_thread(_patch)
