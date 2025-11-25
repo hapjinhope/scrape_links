@@ -120,10 +120,14 @@ async def mark_blocked(record: AvitoCookieRecord, parsed_value: Optional[str] = 
                 "id": f"eq.{record.id}",
                 **({"name": f"eq.{COOKIES_NAME}"} if COOKIES_NAME else {}),
             },
-            data=json.dumps(payload),
+            json=payload,
             timeout=10,
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except Exception as e:
+            logger.warning("⚠️ mark_blocked failed: %s - %s", e, resp.text)
+            raise
 
     await asyncio.to_thread(_patch)
 
@@ -142,10 +146,14 @@ async def mark_parsed(record: AvitoCookieRecord, parsed_value: str) -> None:
                 "id": f"eq.{record.id}",
                 **({"name": f"eq.{COOKIES_NAME}"} if COOKIES_NAME else {}),
             },
-            data=json.dumps({"parsed": parsed_value}),
+            json={"parsed": parsed_value},
             timeout=10,
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except Exception as e:
+            logger.warning("⚠️ mark_parsed failed: %s - %s", e, resp.text)
+            raise
 
     await asyncio.to_thread(_patch)
 
