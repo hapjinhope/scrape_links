@@ -114,8 +114,12 @@ async def mark_blocked(record: AvitoCookieRecord, parsed_value: Optional[str] = 
 
     def _patch():
         resp = requests.patch(
-            f"{_table_url()}?id=eq.{record.id}",
+            _table_url(),
             headers=_headers(),
+            params={
+                "id": f"eq.{record.id}",
+                **({"name": f"eq.{COOKIES_NAME}"} if COOKIES_NAME else {}),
+            },
             data=json.dumps(payload),
             timeout=10,
         )
@@ -132,8 +136,12 @@ async def mark_parsed(record: AvitoCookieRecord, parsed_value: str) -> None:
 
     def _patch():
         resp = requests.patch(
-            f"{_table_url()}?id=eq.{record.id}",
+            _table_url(),
             headers=_headers(),
+            params={
+                "id": f"eq.{record.id}",
+                **({"name": f"eq.{COOKIES_NAME}"} if COOKIES_NAME else {}),
+            },
             data=json.dumps({"parsed": parsed_value}),
             timeout=10,
         )
