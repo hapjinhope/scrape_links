@@ -13,6 +13,8 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 # По умолчанию таблица avito_cookies (можно переопределить через COOKIES_TABLE)
 COOKIES_TABLE = os.getenv("COOKIES_TABLE", "avito_cookies")
+# Опционально: имя набора куков (столбец name), по умолчанию 'links'
+COOKIES_NAME = os.getenv("COOKIES_NAME", "links")
 BLOCKED_VALUE = "kd"
 
 
@@ -73,6 +75,7 @@ async def fetch_cookie_record() -> AvitoCookieRecord:
             headers=_headers(),
             params={
                 "blocked": "eq.false",
+                **({"name": f"eq.{COOKIES_NAME}"} if COOKIES_NAME else {}),
                 "order": "updated_at.nullsfirst,created_at.nullsfirst",
                 "limit": 1,
             },
