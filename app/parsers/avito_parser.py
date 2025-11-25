@@ -10,6 +10,11 @@ from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from dotenv import load_dotenv
+from app.db_cookies import (
+    fetch_cookie_record,
+    mark_blocked,
+    mark_parsed,
+)
 
 # ============ ЛОГИРОВАНИЕ ============
 logging.basicConfig(
@@ -30,6 +35,7 @@ DEFAULT_TELEGRAM_LOG_TOPIC_ID = "217"
 TELEGRAM_LOG_BOT_TOKEN = os.getenv("TELEGRAM_LOG_BOT_TOKEN", DEFAULT_TELEGRAM_LOG_BOT_TOKEN)
 TELEGRAM_LOG_CHAT_ID = os.getenv("TELEGRAM_LOG_CHAT_ID", DEFAULT_TELEGRAM_LOG_CHAT_ID)
 TELEGRAM_LOG_TOPIC_ID = os.getenv("TELEGRAM_LOG_TOPIC_ID", DEFAULT_TELEGRAM_LOG_TOPIC_ID)
+BLOCKED_PARSED_VALUE = "kd"
 
 # ============ УТИЛИТЫ ============
 
@@ -185,6 +191,23 @@ async def log_auth_required_if_needed(page, url: str):
         logger.debug(f"Не удалось проверить необходимость авторизации: {e}")
     return False
 
+
+async def _load_cookies_from_db():
+    """
+    Пытается взять cookies из таблицы avoto_cookies.
+    Возвращает (record, storage_state, blocked_reason)
+    """
+    try:
+        record = await fetch_cookie_record()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось загрузить cookies из БД: {e}")
+        return None, None, None
+
+    if record.blocked:
+        return record, None, "blocked_in_db"
+
+    return record, record.storage_state, None
+
 # ============ ГЛАВНЫЕ ФУНКЦИИ ============
 
 async def parse_avito(url: str, mode: str = "full"):
@@ -192,6 +215,23 @@ async def parse_avito(url: str, mode: str = "full"):
     Полный парсер Avito
     mode: "full" = полный парсинг / "check" = актуальность + цена
     """
+    cookie_record = None
+    db_storage_state = None
+    blocked_reason = None
+
+    # Пробуем взять cookies из БД заранее, чтобы не запускать браузер без смысла
+    cookie_record, db_storage_state, blocked_reason = await _load_cookies_from_db()
+    if blocked_reason == "blocked_in_db":
+        warning_msg = "❌ Cookies помечены как заблокированные в БД, пропускаю парсинг"
+        logger.warning(warning_msg)
+        return {
+            "status": "blocked",
+            "message": warning_msg,
+            "url": url,
+        }
+    if not db_storage_state:
+        raise RuntimeError("⚠️ Cookies из БД не получены, парсинг остановлен")
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -220,17 +260,9 @@ async def parse_avito(url: str, mode: str = "full"):
         }
         
         # ====== ЗАГРУЗКА COOKIES ======
-        if os.path.exists(COOKIES_FILE):
-            try:
-                with open(COOKIES_FILE, 'r') as f:
-                    cookies_data = json.load(f)
-                    cookies_count = len(cookies_data.get('cookies', []))
-                    logger.info(f"🍪 Загружаю cookies: {cookies_count} шт из {COOKIES_FILE}")
-                context_options["storage_state"] = COOKIES_FILE
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка загрузки cookies: {e}")
-        else:
-            logger.info(f"🍪 Cookies файл не найден, работаю без cookies")
+        cookies_count = len(db_storage_state.get('cookies', []))
+        logger.info(f"🍪 Загружаю cookies из БД: {cookies_count} шт")
+        context_options["storage_state"] = db_storage_state
         
         context = await browser.new_context(**context_options)
         
@@ -257,23 +289,29 @@ async def parse_avito(url: str, mode: str = "full"):
         await page.goto(url, wait_until="domcontentloaded")
         await page.wait_for_timeout(1000 if mode == "check" else 3000)
         await close_modals(page)
-        await log_firewall_block_if_needed(page, url)
-        await log_auth_required_if_needed(page, url)
+        firewall_blocked = await log_firewall_block_if_needed(page, url)
+        auth_required = await log_auth_required_if_needed(page, url)
+
+        if firewall_blocked or auth_required:
+            reason = "firewall" if firewall_blocked else "auth_required"
+            logger.error(f"❌ {reason} — Avito не даёт загрузить страницу")
+            if cookie_record:
+                try:
+                    await mark_blocked(cookie_record, BLOCKED_PARSED_VALUE)
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось отметить blocked в БД: {e}")
+            await browser.close()
+            return {
+                'status': 'blocked',
+                'message': f'Avito недоступен ({reason})',
+                'url': url
+            }
         
         if mode == "full":
             await emulate_human_behavior(page)
         
         # ====== СОХРАНЕНИЕ COOKIES ======
-        try:
-            storage_state = await context.storage_state()
-            new_cookies_count = len(storage_state.get('cookies', []))
-            
-            with open(COOKIES_FILE, 'w') as f:
-                json.dump(storage_state, f, ensure_ascii=False, indent=2)
-            
-            logger.info(f"🍪 Cookies обновлены: {new_cookies_count} шт → {COOKIES_FILE}")
-        except Exception as e:
-            logger.error(f"❌ Ошибка сохранения cookies: {e}")
+        # Сохранение/обновление cookies отключено по требованию (только читаем из БД)
         
                 # ====== ПРОВЕРКА АКТУАЛЬНОСТИ (всегда) ======
         try:
@@ -699,6 +737,22 @@ async def parse_avito(url: str, mode: str = "full"):
 
 async def parse_avito_phone_only(url: str) -> dict:
     """Парсит ТОЛЬКО телефон с Avito (игнорирует платную услугу)"""
+    cookie_record = None
+    db_storage_state = None
+    blocked_reason = None
+
+    cookie_record, db_storage_state, blocked_reason = await _load_cookies_from_db()
+    if blocked_reason == "blocked_in_db":
+        warning_msg = "❌ Cookies помечены как blocked в БД, пропускаю запрос телефона"
+        logger.warning(warning_msg)
+        return {
+            'status': 'blocked',
+            'message': warning_msg,
+            'url': url
+        }
+    if not db_storage_state:
+        raise RuntimeError("⚠️ Cookies из БД не получены, парсинг остановлен")
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -719,12 +773,8 @@ async def parse_avito_phone_only(url: str) -> dict:
             "timezone_id": "Europe/Moscow",
         }
         
-        if os.path.exists(COOKIES_FILE):
-            try:
-                context_options["storage_state"] = COOKIES_FILE
-                logger.info("🍪 Cookies загружены")
-            except:
-                pass
+        context_options["storage_state"] = db_storage_state
+        logger.info("🍪 Cookies загружены из БД")
         
         context = await browser.new_context(**context_options)
         
@@ -738,6 +788,22 @@ async def parse_avito_phone_only(url: str) -> dict:
         await page.goto(url, wait_until="domcontentloaded")
         await asyncio.sleep(3)
         await close_modals(page)
+
+        firewall_blocked = await log_firewall_block_if_needed(page, url)
+        auth_required = await log_auth_required_if_needed(page, url)
+        if firewall_blocked or auth_required:
+            reason = "firewall" if firewall_blocked else "auth_required"
+            if cookie_record:
+                try:
+                    await mark_blocked(cookie_record, BLOCKED_PARSED_VALUE)
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось отметить blocked (phone only): {e}")
+            await browser.close()
+            return {
+                'status': 'blocked',
+                'message': f'Avito недоступен ({reason})',
+                'url': url
+            }
         
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
         await asyncio.sleep(1)
@@ -802,7 +868,9 @@ async def parse_avito_phone_only(url: str) -> dict:
                             break
                 except Exception as e:
                     logger.error(f"❌ Ошибка OCR: {e}")
-        
+
+        # Сохранение/обновление cookies отключено по требованию (только читаем из БД)
+
         await browser.close()
         
         return {
