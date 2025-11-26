@@ -296,7 +296,7 @@ async def parse_avito(url: str, mode: str = "full"):
             logger.error(f"❌ {reason} — Avito не даёт загрузить страницу")
             if cookie_record:
                 try:
-                    await mark_blocked(cookie_record, BLOCKED_PARSED_VALUE)
+                    await mark_blocked(cookie_record)
                 except Exception as e:
                     logger.warning(f"⚠️ Не удалось отметить blocked в БД: {e}")
             await browser.close()

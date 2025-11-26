@@ -57,6 +57,14 @@ async def parse_cian(url: str, mode: str = "full"):
         # ====== РЕЖИМ "full" - полный парсинг ======
         flat = {'status': 'active', 'price': price}
 
+        # ====== ПРЕДУПРЕЖДЕНИЯ ======
+        try:
+            warning_block = await page.query_selector('.xa15a2ab7--c2358a--messages_container')
+            if warning_block:
+                flat['warning'] = (await warning_block.inner_text()).strip()
+        except Exception:
+            pass
+
         # ====== ЗАГОЛОВОК (summary) ======
         try:
             h1 = await page.query_selector("h1")
@@ -380,12 +388,16 @@ async def parse_cian(url: str, mode: str = "full"):
                 except Exception as e:
                     logger.warning(f"⚠️ Способ 2 ошибка: {e}")
             
-            flat['photos'] = list(photos)
-            logger.info(f"✅ ФОТО: Собрано {len(flat['photos'])} изображений")
+            if photos:
+                flat['photos'] = list(photos)
+                logger.info(f"✅ ФОТО: Собрано {len(flat['photos'])} изображений")
+            else:
+                flat['photos'] = ["нет фото"]
+                logger.info("✅ ФОТО: нет фото")
             
         except Exception as e:
             logger.error(f"❌ Ошибка парсинга фото: {e}")
-            flat['photos'] = []
+            flat['photos'] = ["нет фото"]
 
         # ====== ТЕЛЕФОН ======
         try:
